@@ -1,11 +1,9 @@
 const express = require('express');
-const ytStream = require('yt-stream');
+const axios = require('axios');
 const app = express();
 
 app.get('/play', async (req, res) => {
     const youtubeUrl = req.query.url;
-
-    // Errors ke liye default content-type set karein
     res.setHeader('Content-Type', 'application/json');
 
     if (!youtubeUrl) {
@@ -13,29 +11,46 @@ app.get('/play', async (req, res) => {
     }
 
     try {
-        // 1. YouTube se direct stream info nikalna bina kisi third-party API ke
-        const stream = await ytStream.stream(youtubeUrl, {
-            quality: 'high',
-            type: 'audio',
-            highWaterMark: 1048576 * 32 // Buffering behtar karne ke liye
-        });
-
-        if (stream && stream.url) {
-            // 2. DIRECT PLAY: Browser ko seedhe Google ke official audio link par bhej do
-            return res.redirect(stream.url);
+        let videoId = '';
+        if (youtubeUrl.includes('youtu.be/')) {
+            videoId = youtubeUrl.split('youtu.be/')[1].split('?')[0];
+        } else if (youtubeUrl.includes('v=')) {
+            videoId = youtubeUrl.split('v=')[1].split('&')[0];
         } else {
-            return res.status(404).json({ error: "Could not extract raw audio stream URL." });
+            videoId = youtubeUrl;
         }
 
+        // Ek automatic open engine jo public infrastructure par bina Cloudflare ke chalti hai
+        const response = await axios.get(`https://api.allorigins.win/get?url=${encodeURIComponent('https://www.youtube.com/watch?v=' + videoId)}`);
+        const html = response.data.contents;
+
+        // YouTube ke adaptiveFormats (audio) ko raw HTML se extract karne ki koshish
+        const regex = /"adaptiveFormats":\s*(\[.+?\])/;
+        const match = html.match(regex);
+
+        if (match && match[1]) {
+            const formats = JSON.parse(match[1]);
+            // Sirf audio formats nikalna (audio/mp4 ya audio/webm)
+            const audioFormats = formats.filter(f => f.mimeType && f.mimeType.startsWith('audio/'));
+            
+            if (audioFormats.length > 0) {
+                // Sabse pehla high quality stream URL pakdein
+                const directUrl = audioFormats[0].url;
+                return res.redirect(directUrl);
+            }
+        }
+
+        // Agar automatic extraction fail ho toh ek external backup open stream proxy pr bhej do
+        return res.redirect(`https://youtube-hls-proxy.vercel.app/api/stream/${videoId}`);
+
     } catch (error) {
-        console.error("Local Scraper Error:", error.message);
+        console.error("Bypass Error:", error.message);
         return res.status(500).json({
             error: "Internal Server Error",
-            message: "YouTube local scraping failed. Serverless IP might be restricted.",
+            message: "Failed to process stream due to network block.",
             details: error.message
         });
     }
 });
 
 module.exports = app;
-
