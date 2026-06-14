@@ -1,37 +1,27 @@
 const express = require('express');
-const ytdl = require('@distube/ytdl-core');
-const path = require('path');
+const axios = require('axios');
 const app = express();
 
-app.use(express.json());
-
-// Cache directory for Render (writable /tmp)
-process.env.YTDL_CACHE_DIR = path.join('/tmp', 'ytdl-cache');
-
 app.get('/video-info', async (req, res) => {
-    // ... wahi purana logic ...
-    const videoUrlOrId = req.query.url || req.query.id;
-    if (!videoUrlOrId) return res.status(400).json({ error: "Provide url/id" });
+    const videoId = req.query.id;
+    if (!videoId) return res.status(400).json({ error: "ID chahiye" });
 
     try {
-        const agent = ytdl.createAgent([{ clientName: 'ANDROID', clientVersion: '19.14.35' }]);
-        const info = await ytdl.getInfo(videoUrlOrId, { agent });
-
-        res.json({
-            success: true,
-            title: info.videoDetails.title,
-            formats: info.formats.filter(f => f.url).map(f => ({
-                quality: f.qualityLabel || f.audioQuality,
-                url: f.url
-            }))
+        // YouTube ka official player config fetch karna (No lib, No File Write)
+        const response = await axios.get(`https://www.youtube.com/get_video_info?video_id=${videoId}&el=embedded&ps=default&eurl=&hl=en_US`);
+        
+        // Agar yahan se data na mile, toh hum direct innertube use karenge
+        const { data } = await axios.post(`https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_JVGgS09BI5Y7L5HnSh9A3gE0Wj7V0Y`, {
+            videoId: videoId,
+            context: { client: { clientName: 'ANDROID', clientVersion: '19.14.35' } }
         });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+
+        const formats = data.streamingData.adaptiveFormats;
+        res.json({ success: true, formats });
+
+    } catch (e) {
+        res.status(500).json({ error: "Fetch failed", details: e.message });
     }
 });
 
-// RENDER KE LIYE ZAROORI: Port bind karna
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+app.listen(3000);
