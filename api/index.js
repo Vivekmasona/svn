@@ -5,7 +5,7 @@ const app = express();
 app.get('/play', async (req, res) => {
     const youtubeUrl = req.query.url;
 
-    // Response hamesha JSON format mein rahega errors ke liye
+    // Default response type JSON set karein errors ke liye
     res.setHeader('Content-Type', 'application/json');
 
     if (!youtubeUrl) {
@@ -13,51 +13,41 @@ app.get('/play', async (req, res) => {
     }
 
     try {
-        // 1. YouTube URL se Video ID nikalna
-        let videoId = '';
-        if (youtubeUrl.includes('youtu.be/')) {
-            videoId = youtubeUrl.split('youtu.be/')[1].split('?')[0];
-        } else if (youtubeUrl.includes('v=')) {
-            videoId = youtubeUrl.split('v=')[1].split('&')[0];
-        } else {
-            videoId = youtubeUrl;
-        }
-
-        // 2. Ek ekdum stable free global stream fetcher ko hit karenge
-        // Ye bina kisi API key ya rate limit ke directly link return karta hai
-        const response = await axios.get(`https://downloader.moe/api/v1/info/${videoId}`, {
+        // Cobalt v10 ka naya endpoint aur sahi request body format
+        const response = await axios.post('https://api.cobalt.tools/', {
+            url: youtubeUrl,
+            videoQuality: '720', // Default quality
+            audioFormat: 'mp3',   // Hame audio chahiye
+            audioBitrate: '128',
+            filenamePattern: 'classic',
+            isAudioOnly: true,    // V10 me audio only ke liye ye key zaroori hai
+            isNoTTWatermark: true
+        }, {
             headers: {
                 'Accept': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'Content-Type': 'application/json'
             }
         });
 
         const data = response.data;
 
-        // 3. Audio formats dhoondhein
-        if (data && data.formats) {
-            // Sirf audio format ko filter karein (audio/mp4 ya audio/webm)
-            const audioFormats = data.formats.filter(f => f.mimeType && f.mimeType.includes('audio/'));
-            
-            if (audioFormats.length > 0) {
-                // Sabse best quality audio url pakdein
-                const streamUrl = audioFormats[0].url;
-                
-                // DIRECT PLAY: Browser ko seedhe Google ke streaming player par bhej do
-                return res.redirect(streamUrl);
-            }
+        // Cobalt v10 response status check karne ke liye 'status' key deta hai
+        // Status 'redirect' ya 'stream' hone par direct 'url' milti hai
+        if (data && data.url) {
+            // DIRECT PLAY: Browser ko direct stream link par redirect kar do
+            return res.redirect(data.url);
+        } else {
+            return res.status(500).json({
+                error: "Could not fetch direct stream URL from Cobalt v10.",
+                cobalt_response: data
+            });
         }
 
-        return res.status(404).json({
-            error: "Audio format not found in the stable stream engine.",
-            api_response: data
-        });
-
     } catch (error) {
-        console.error("Stream Engine Error:", error.message);
+        console.error("Cobalt v10 Streaming Error:", error.message);
         return res.status(500).json({
             error: "Internal Server Error",
-            message: "Failed to fetch direct audio stream.",
+            message: "Failed to stream audio via Cobalt v10 engine.",
             details: error.response ? error.response.data : error.message
         });
     }
