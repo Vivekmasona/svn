@@ -1,7 +1,14 @@
 {
   "name": "yt-to-jiosaavn-bridge",
   "version": "1.0.0",
-  "dependencies": {
-    "node-fetch": "^3.3.2"
-  }
+  "description": "Bridge between YouTube ID and JioSaavn API",
+  "main": "api/get-song.js",
+  "scripts": {
+    "vnode": "node -v"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {}
 }
