@@ -4,14 +4,13 @@ const app = express();
 
 app.use(express.json());
 
-// Function: Jo SoundCloud ke live script se fresh client_id dhoondh ke nikalega
+// Function: Live client_id extract karne ke liye
 async function getFreshClientId() {
     try {
         const homeResponse = await axios.get('https://soundcloud.com', {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
         });
         const html = homeResponse.data;
-        
         const scriptRegex = /src="([^"]+\/assets\/[^"]+\.js)"/g;
         let match;
         const scripts = [];
@@ -32,64 +31,65 @@ async function getFreshClientId() {
     return '2t9mqaC7aZrr6v6scvW6Y06Z7v0K8A1Z'; 
 }
 
-// SINGLE MAIN ROUTE: Search and Direct Play (No JSON output!)
+// MAIN PLAY ROUTE: Loop ke sath fix kiya gaya hai
 app.get('/play', async (req, res) => {
-    // Aap query parameter (?query=...) ya fir purana track id (?id=...) dono use kar sakte hain
     const songQuery = req.query.query;
     const trackId = req.query.id;
 
     try {
         const dynamicId = await getFreshClientId();
-        let targetTrack = null;
+        let tracksToTry = [];
 
-        // CASE 1: Agar gaane ka naam (query) diya gaya hai
+        // CASE 1: Agar query di gayi hai (jaise: /play?query=backbone)
         if (songQuery) {
             const searchResponse = await axios.get(`https://api-v2.soundcloud.com/search/tracks`, {
-                params: {
-                    q: songQuery,
-                    client_id: dynamicId,
-                    limit: 5 // Top 5 results nikalenge filter karne ke liye
-                }
+                params: { q: songQuery, client_id: dynamicId, limit: 10 }
             });
 
             const collection = searchResponse.data?.collection;
             if (collection && collection.length > 0) {
-                // Pehle koshish karenge ki koi aisa track mile jo remix/slowed na ho (Original-like)
-                targetTrack = collection.find(track => {
+                // Pehle original (bina remix/slowed wale) tracks ko priority denge
+                const originals = collection.filter(track => {
                     const title = track.title.toLowerCase();
-                    return !title.includes('slowed') && !title.includes('reverb') && !title.includes('remix');
-                }) || collection[0]; // Agar sab lofi/remix hain, toh pehla result utha lo
+                    return !title.includes('slowed') && !title.includes('reverb') && !title.includes('remix') && !title.includes('bootleg');
+                });
+                
+                // Sabhi safe tracks aur bache hue tracks ko ek list me daal denge loop chalane ke liye
+                tracksToTry = [...originals, ...collection.filter(t => !originals.includes(t))];
             }
         } 
-        // CASE 2: Agar seedhe track id paas ki gayi ho (purane compatibility ke liye)
+        // CASE 2: Agar ID di gayi ho
         else if (trackId) {
             const trackResponse = await axios.get(`https://api-v2.soundcloud.com/tracks/${trackId}?client_id=${dynamicId}`);
-            targetTrack = trackResponse.data;
+            if (trackResponse.data) tracksToTry.push(trackResponse.data);
         } 
-        // Agar dono nahi hain toh error
         else {
             res.setHeader('Content-Type', 'application/json');
             return res.status(400).json({ error: "Please provide either a 'query' or an 'id' parameter." });
         }
 
-        // Streaming Link Extraction logic
-        if (targetTrack) {
+        // LOOPING FALLBACK: Jab tak chalne layaq mp3 stream na mile, tab tak list ke gaane try karo
+        for (let targetTrack of tracksToTry) {
             const progressiveTranscoding = targetTrack.media?.transcodings?.find(
                 t => t.format.protocol === 'progressive'
             );
 
             if (progressiveTranscoding && progressiveTranscoding.url) {
-                const streamAuthResponse = await axios.get(`${progressiveTranscoding.url}?client_id=${dynamicId}`);
-                
-                if (streamAuthResponse.data && streamAuthResponse.data.url) {
-                    // DIRECT AUDIO REDIRECT: Seedhe gaana chalega, koi json nahi!
-                    return res.redirect(streamAuthResponse.data.url);
+                try {
+                    const streamAuthResponse = await axios.get(`${progressiveTranscoding.url}?client_id=${dynamicId}`);
+                    if (streamAuthResponse.data && streamAuthResponse.data.url) {
+                        // Mil gaya working stream link! Direct play karo.
+                        return res.redirect(streamAuthResponse.data.url);
+                    }
+                } catch (streamErr) {
+                    // Agar ek track fail ho jaye, toh agle track par jao (crash mat karo)
+                    console.log(`Failed stream for track ${targetTrack.id}, trying next...`);
                 }
             }
         }
 
         res.setHeader('Content-Type', 'application/json');
-        return res.status(404).json({ error: "Audio track could not be fetched or played." });
+        return res.status(404).json({ error: "No playable audio stream found for this query." });
 
     } catch (error) {
         res.setHeader('Content-Type', 'application/json');
@@ -97,7 +97,7 @@ app.get('/play', async (req, res) => {
     }
 });
 
-// Search route ko backup ke liye choda hai agar kabhi metadata (image/title) chahiye ho
+// Search route for fallback/metadata
 app.get('/search', async (req, res) => {
     const songQuery = req.query.query;
     res.setHeader('Content-Type', 'application/json');
