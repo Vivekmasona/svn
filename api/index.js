@@ -17,35 +17,33 @@ app.get('/video-info', async (req, res) => {
     }
 
     try {
-        // Android Client Agent (Sabse stable bypass)
-        const agent = ytdl.createAgent(JSON.parse(JSON.stringify(require('@distube/ytdl-core/lib/client-agents'))));
+        // Manual Android Agent Config (Koi external path ki zaroorat nahi)
+        const agent = ytdl.createAgent([{
+            clientName: 'ANDROID',
+            clientVersion: '19.14.35',
+        }]);
 
         const streamOptions = {
             agent: agent,
             requestOptions: {
                 headers: {
-                    'User-Agent': 'com.google.android.youtube/19.14.35 (Linux; U; Android 11; en_US) Max/100',
-                    'X-YouTube-Client-Name': '3',
-                    'X-YouTube-Client-Version': '19.14.35'
+                    'User-Agent': 'com.google.android.youtube/19.14.35 (Linux; U; Android 11; en_US) Max/100'
                 }
             }
         };
 
-        // Info fetch with agent
         const info = await ytdl.getInfo(videoUrlOrId, streamOptions);
 
         const videoDump = {
             success: true,
             title: info.videoDetails.title,
-            // Sirf wahi format filter kiye jinke paas URL hai
-            formats: info.formats
-                .filter(f => f.url) 
-                .map(f => ({
-                    quality: f.qualityLabel || f.audioQuality,
-                    url: f.url,
-                    container: f.container,
-                    mimeType: f.mimeType
-                }))
+            // Filter: Sirf wo format jinme url valid hai
+            formats: info.formats.filter(f => f.url).map(f => ({
+                quality: f.qualityLabel || f.audioQuality,
+                url: f.url,
+                container: f.container,
+                mimeType: f.mimeType
+            }))
         };
 
         return res.status(200).json(videoDump);
@@ -60,4 +58,3 @@ app.get('/video-info', async (req, res) => {
 });
 
 module.exports = app;
-
