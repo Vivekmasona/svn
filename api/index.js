@@ -1,80 +1,67 @@
-const https = require('https');
+const express = require('express');
+const axios = require('axios');
+const app = express();
 
-// Helper function: Request fetch karne ke liye
-function makeRequest(url) {
-    return new Promise((resolve, reject) => {
-        https.get(url, (res) => {
-            let data = '';
-            res.on('data', (chunk) => { data += chunk; });
-            res.on('end', () => {
-                try {
-                    resolve(JSON.parse(data));
-                } catch (e) {
-                    reject(new Error("Invalid JSON response"));
-                }
-            });
-        }).on('error', (err) => { reject(err); });
-    });
-}
+app.get('/play', async (req, res) => {
+    const youtubeUrl = req.query.url;
 
-// Title cleaning logic
-function cleanYoutubeTitle(title) {
-    if (!title) return "";
-    let clean = title.toLowerCase();
-
-    clean = clean.replace(/\(.*?\)/g, "").replace(/\[.*?\]/g, "");
-
-    if (clean.includes('|')) clean = clean.split('|')[0];
-    if (clean.includes('-')) clean = clean.split('-')[0];
-    if (clean.includes(':')) clean = clean.split(':')[0];
-    if (clean.includes('/')) clean = clean.split('/')[0];
-
-    const extraWords = ["official", "video", "audio", "lyrical", "lyrics", "full song", "hd", "4k", "remix", "lofi"];
-    extraWords.forEach(word => {
-        const regex = new RegExp(`\\b${word}\\b`, 'gi');
-        clean = clean.replace(regex, "");
-    });
-
-    return clean.replace(/\s+/g, " ").trim();
-}
-
-// Main handler
-module.exports = async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET');
-    res.setHeader('Content-Type', 'application/json');
-
-    const { id } = req.query;
-
-    if (!id || id.length !== 11) {
-        return res.status(400).json({ error: "Valid 11-character YouTube ID (?id=...) chahiye." });
+    // 1. Validation: Check agar URL query mein pass kiya hai ya nahi
+    if (!youtubeUrl) {
+        return res.status(400).json({ error: "Please provide a 'url' query parameter." });
     }
 
     try {
-        // Step 1: Deno API hit karna
-        const denoUrl = `https://vivekmasona-denocall-61.deno.dev/search?q=${encodeURIComponent(id)}`;
-        const denoData = await makeRequest(denoUrl);
+        // 2. RapidAPI Setup
+        const options = {
+            method: 'GET',
+            url: 'https://youtube-info-download-api.p.rapidapi.com/ajax/download.php',
+            params: {
+                format: 'mp3',
+                add_info: '0',
+                url: youtubeUrl,
+                audio_quality: '249',
+                allow_extended_duration: 'true',
+                no_merge: 'false',
+                audio_language: 'en'
+            },
+            headers: {
+                // APNI REAL KEY SE REPLACE KAREIN (Best practice: use process.env.RAPIDAPI_KEY)
+                'x-rapidapi-key': '650590bd0fmshcf4139ece6a3f8ep145d16jsn955dc4e5fc9a',
+                'x-rapidapi-host': 'youtube-info-download-api.p.rapidapi.com',
+                'Content-Type': 'application/json'
+            }
+        };
 
-        if (!denoData || !denoData.items || denoData.items.length === 0) {
-            return res.status(404).json({ error: "YouTube video nahi mili." });
+        // 3. Call the API
+        const response = await axios.request(options);
+        const data = response.data;
+
+        // 4. Response handle karein
+        if (data.success && data.content) {
+            // Base64 string ko Buffer (binary) mein convert karein
+            const audioBuffer = Buffer.from(data.content, 'base64');
+
+            // Browser ko batayein ki ye ek audio MP3 file hai
+            res.setHeader('Content-Type', 'audio/mpeg');
+            res.setHeader('Content-Disposition', 'attachment; filename="audio.mp3"');
+
+            // Binary data stream send karein
+            return res.send(audioBuffer);
+        } else if (data.progress_url) {
+            // Agar file turant ready nahi hui aur backend par process ho rahi hai
+            return res.status(202).json({
+                message: "Audio is processing on backend. Please retry in a few seconds.",
+                progress_url: data.progress_url
+            });
+        } else {
+            return res.status(500).json({ error: "Failed to fetch content from API.", details: data });
         }
 
-        const rawTitle = denoData.items[0].snippet.title;
-        const shortSongName = cleanYoutubeTitle(rawTitle);
-        const finalQuery = shortSongName || rawTitle.split(" ")[0];
-
-        // Step 2: JioSaavn API hit karna
-        const jioSaavnUrl = `https://svn-vivekfy.vercel.app/search/songs?query=${encodeURIComponent(finalQuery)}`;
-        const songData = await makeRequest(jioSaavnUrl);
-
-        return res.status(200).json({
-            success: true,
-            youtubeRawTitle: rawTitle,
-            searchedWithTitle: finalQuery,
-            jioSaavnResults: songData
-        });
-
     } catch (error) {
-        return res.status(500).json({ error: "Server Error", details: error.message });
+        console.error(error);
+        return res.status(500).json({ error: "Internal Server Error", message: error.message });
     }
-};
+});
+
+// Vercel ke liye export karna zaroori hai
+module.exports = app;
