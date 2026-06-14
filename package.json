@@ -1,16 +1,9 @@
 {
-  "name": "jiosaavn-audio-streamer",
+  "name": "vercel-express-youtube",
   "version": "1.0.0",
-  "description": "Bina kisi limit aur block ke direct JioSaavn audio streaming",
   "main": "api/index.js",
-  "scripts": {
-    "start": "node api/index.js"
-  },
   "dependencies": {
-    "axios": "^1.7.9",
-    "express": "^4.19.2"
-  },
-  "engines": {
-    "node": "18.x"
+    "axios": "^1.7.0",
+    "express": "^4.19.0"
   }
 }
