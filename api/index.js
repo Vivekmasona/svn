@@ -1,11 +1,11 @@
 const express = require('express');
-const axios = require('axios');
+const ytStream = require('yt-stream');
 const app = express();
 
 app.get('/play', async (req, res) => {
     const youtubeUrl = req.query.url;
 
-    // Default response type JSON set karein errors ke liye
+    // Errors ke liye default content-type set karein
     res.setHeader('Content-Type', 'application/json');
 
     if (!youtubeUrl) {
@@ -13,45 +13,29 @@ app.get('/play', async (req, res) => {
     }
 
     try {
-        // Cobalt v10/v11 standards ke mutabik 'https://sunny.imput.net/' par POST request bhejenge
-        const response = await axios.post('https://sunny.imput.net/', {
-            url: youtubeUrl,
-            videoQuality: '720',
-            audioFormat: 'mp3',   // Hame audio chahiye
-            audioBitrate: '128',
-            filenamePattern: 'classic',
-            isAudioOnly: true,    // Audio separate nikalne ke liye
-            isNoTTWatermark: true
-        }, {
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                // User-Agent dena zaroori hai taaki request block na ho
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+        // 1. YouTube se direct stream info nikalna bina kisi third-party API ke
+        const stream = await ytStream.stream(youtubeUrl, {
+            quality: 'high',
+            type: 'audio',
+            highWaterMark: 1048576 * 32 // Buffering behtar karne ke liye
         });
 
-        const data = response.data;
-
-        // Agar Sunny instance ne successful processing ke baad direct link de diya
-        if (data && data.url) {
-            // DIRECT PLAY: Browser ko direct stream link par redirect kar do
-            return res.redirect(data.url);
+        if (stream && stream.url) {
+            // 2. DIRECT PLAY: Browser ko seedhe Google ke official audio link par bhej do
+            return res.redirect(stream.url);
         } else {
-            return res.status(500).json({
-                error: "Could not fetch direct stream URL from Sunny instance.",
-                sunny_response: data
-            });
+            return res.status(404).json({ error: "Could not extract raw audio stream URL." });
         }
 
     } catch (error) {
-        console.error("Sunny Instance Error:", error.message);
+        console.error("Local Scraper Error:", error.message);
         return res.status(500).json({
             error: "Internal Server Error",
-            message: "Failed to stream audio via Sunny Cobalt instance.",
-            details: error.response ? error.response.data : error.message
+            message: "YouTube local scraping failed. Serverless IP might be restricted.",
+            details: error.message
         });
     }
 });
 
 module.exports = app;
+
