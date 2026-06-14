@@ -3,32 +3,22 @@ const axios = require('axios');
 const app = express();
 
 app.get('/play', async (req, res) => {
-    // Response headers hamesha JSON ke liye set karein
-    res.setHeader('Content-Type', 'application/json');
-
     try {
         let youtubeUrl = req.query.url;
 
         if (!youtubeUrl) {
+            res.setHeader('Content-Type', 'application/json');
             return res.status(400).json({ error: "Please provide a 'url' query parameter." });
         }
 
-        // 1. Safe Video ID Extraction (Taaki crash na ho)
+        // 1. Video ID extract karein
         let videoId = '';
-        try {
-            if (youtubeUrl.includes('youtu.be/')) {
-                videoId = youtubeUrl.split('youtu.be/')[1].split('?')[0];
-            } else if (youtubeUrl.includes('v=')) {
-                videoId = youtubeUrl.split('v=')[1].split('&')[0];
-            } else {
-                videoId = youtubeUrl; // Agar direct ID daali ho
-            }
-        } catch (urlError) {
-            return res.status(400).json({ error: "Invalid YouTube URL format." });
-        }
-
-        if (!videoId) {
-            return res.status(400).json({ error: "Could not extract Video ID from the provided URL." });
+        if (youtubeUrl.includes('youtu.be/')) {
+            videoId = youtubeUrl.split('youtu.be/')[1].split('?')[0];
+        } else if (youtubeUrl.includes('v=')) {
+            videoId = youtubeUrl.split('v=')[1].split('&')[0];
+        } else {
+            videoId = youtubeUrl;
         }
 
         // 2. API Options
@@ -48,25 +38,35 @@ app.get('/play', async (req, res) => {
             }
         };
 
-        // 3. API Request with Axios
+        // 3. API Request
         const response = await axios.request(options);
-        
-        // Response send karein
-        return res.status(200).json({
-            status: "Success",
-            video_id: videoId,
-            api_data: response.data
+        const apiData = response.data;
+
+        // 4. AUDIO FILE LOGIC: JSON data ke andar se audio link dundhna
+        if (apiData && apiData.contents && apiData.contents.contents) {
+            const formats = apiData.contents.contents;
+            
+            // Sabhi formats mein se aisa format dhoondho jisme sirf audio ho (video na ho)
+            // Ya fir jiska mimeType audio se start hota ho
+            const audioFormat = formats.find(f => f.mimeType && f.mimeType.startsWith('audio/'));
+
+            if (audioFormat && audioFormat.url) {
+                // AGAR DIRECT BROWSER ME PLAY/REDIRECT KARNA HAI:
+                return res.redirect(audioFormat.url);
+            }
+        }
+
+        // Agar audio link nahi mila toh backup mein pura data dikha do checking ke liye
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(404).json({
+            error: "Direct Audio URL not found in API response.",
+            api_data: apiData
         });
 
     } catch (error) {
-        // Kisi bhi tareeqay ka error aane par server crash nahi hoga, ye response bhej dega
-        console.error("Vercel Function Error: ", error.message);
-        
-        return res.status(error.response ? error.response.status : 500).json({
-            status: "Error",
-            message: error.message,
-            api_details: error.response ? error.response.data : "No external details available"
-        });
+        console.error(error);
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(500).json({ error: "Internal Server Error", message: error.message });
     }
 });
 
