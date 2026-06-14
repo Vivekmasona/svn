@@ -1,6 +1,6 @@
 const https = require('https');
 
-// Helper function: Kisi bhi URL se data fetch karne ke liye (Bina fetch dependency ke)
+// Helper function: Request fetch karne ke liye
 function makeRequest(url) {
     return new Promise((resolve, reject) => {
         https.get(url, (res) => {
@@ -47,7 +47,7 @@ module.exports = async (req, res) => {
     const { id } = req.query;
 
     if (!id || id.length !== 11) {
-        return res.status(400).json({ error: "Valid 11-character YouTube ID chahiye." });
+        return res.status(400).json({ error: "Valid 11-character YouTube ID (?id=...) chahiye." });
     }
 
     try {
