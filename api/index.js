@@ -1,13 +1,11 @@
 const express = require('express');
 const ytdl = require('@distube/ytdl-core');
-const os = require('os');
 const path = require('path');
 const app = express();
 
 app.use(express.json());
 
-// VERCEL FIX: Cache directory ko /tmp folder mein redirect karna
-// Isse ytdl ki 'EROFS' wali error kabhi nahi aayegi.
+// Force use of tmp for cache
 process.env.YTDL_CACHE_DIR = path.join('/tmp', 'ytdl-cache');
 
 app.get('/video-info', async (req, res) => {
@@ -19,26 +17,35 @@ app.get('/video-info', async (req, res) => {
     }
 
     try {
+        // Android Client Agent (Sabse stable bypass)
+        const agent = ytdl.createAgent(JSON.parse(JSON.stringify(require('@distube/ytdl-core/lib/client-agents'))));
+
         const streamOptions = {
+            agent: agent,
             requestOptions: {
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+                    'User-Agent': 'com.google.android.youtube/19.14.35 (Linux; U; Android 11; en_US) Max/100',
+                    'X-YouTube-Client-Name': '3',
+                    'X-YouTube-Client-Version': '19.14.35'
                 }
             }
         };
 
-        // Info fetch
+        // Info fetch with agent
         const info = await ytdl.getInfo(videoUrlOrId, streamOptions);
 
         const videoDump = {
             success: true,
             title: info.videoDetails.title,
-            formats: info.formats.map(f => ({
-                quality: f.qualityLabel || f.audioQuality,
-                url: f.url,
-                container: f.container,
-                mimeType: f.mimeType
-            }))
+            // Sirf wahi format filter kiye jinke paas URL hai
+            formats: info.formats
+                .filter(f => f.url) 
+                .map(f => ({
+                    quality: f.qualityLabel || f.audioQuality,
+                    url: f.url,
+                    container: f.container,
+                    mimeType: f.mimeType
+                }))
         };
 
         return res.status(200).json(videoDump);
