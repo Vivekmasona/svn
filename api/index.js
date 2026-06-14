@@ -7,13 +7,11 @@ app.use(express.json());
 // Function: Jo SoundCloud ke live script se fresh client_id dhoondh ke nikalega
 async function getFreshClientId() {
     try {
-        // 1. SoundCloud ki home page se script links nikalna
         const homeResponse = await axios.get('https://soundcloud.com', {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
         });
         const html = homeResponse.data;
         
-        // Scripts ko dhoondhne ke liye regex
         const scriptRegex = /src="([^"]+\/assets\/[^"]+\.js)"/g;
         let match;
         const scripts = [];
@@ -21,100 +19,105 @@ async function getFreshClientId() {
             scripts.push(match[1]);
         }
 
-        // 2. Last script ko check karna (aamtaur par isme client_id hoti hai)
         for (let scriptUrl of scripts.reverse().slice(0, 3)) {
             const scriptResponse = await axios.get(scriptUrl);
             const idMatch = scriptResponse.data.match(/client_id\s*:\s*"([a-zA-Z0-9]{32})"/);
             if (idMatch && idMatch[1]) {
-                return idMatch[1]; // Mil gayi fresh ID!
+                return idMatch[1];
             }
         }
     } catch (e) {
         console.error("ID extraction failed, using fallback");
     }
-    // Fallback ID agar extraction fail ho jaye
     return '2t9mqaC7aZrr6v6scvW6Y06Z7v0K8A1Z'; 
 }
 
-// ROUTE 1: Search Route (With Dynamic Client ID)
-app.get('/search', async (req, res) => {
+// SINGLE MAIN ROUTE: Search and Direct Play (No JSON output!)
+app.get('/play', async (req, res) => {
+    // Aap query parameter (?query=...) ya fir purana track id (?id=...) dono use kar sakte hain
     const songQuery = req.query.query;
-    res.setHeader('Content-Type', 'application/json');
-
-    if (!songQuery) {
-        return res.status(400).json({ error: "Please provide a 'query' parameter." });
-    }
+    const trackId = req.query.id;
 
     try {
         const dynamicId = await getFreshClientId();
-        
-        const response = await axios.get(`https://api-v2.soundcloud.com/search/tracks`, {
-            params: {
-                q: songQuery,
-                client_id: dynamicId,
-                limit: 10
-            }
-        });
+        let targetTrack = null;
 
-        const data = response.data;
-
-        if (data && data.collection && data.collection.length > 0) {
-            const results = data.collection.map(track => {
-                const playUrl = `https://${req.get('host')}/play?id=${track.id}`;
-                return {
-                    id: track.id,
-                    title: track.title,
-                    album: track.publisher_metadata?.album_title || "Single",
-                    image: track.artwork_url ? track.artwork_url.replace('large', 't500x500') : 'https://soundcloud.com/favicon.ico',
-                    artist: track.user?.username || "Unknown Artist",
-                    stream_url: playUrl
-                };
+        // CASE 1: Agar gaane ka naam (query) diya gaya hai
+        if (songQuery) {
+            const searchResponse = await axios.get(`https://api-v2.soundcloud.com/search/tracks`, {
+                params: {
+                    q: songQuery,
+                    client_id: dynamicId,
+                    limit: 5 // Top 5 results nikalenge filter karne ke liye
+                }
             });
 
-            return res.status(200).json({ success: true, results });
+            const collection = searchResponse.data?.collection;
+            if (collection && collection.length > 0) {
+                // Pehle koshish karenge ki koi aisa track mile jo remix/slowed na ho (Original-like)
+                targetTrack = collection.find(track => {
+                    const title = track.title.toLowerCase();
+                    return !title.includes('slowed') && !title.includes('reverb') && !title.includes('remix');
+                }) || collection[0]; // Agar sab lofi/remix hain, toh pehla result utha lo
+            }
+        } 
+        // CASE 2: Agar seedhe track id paas ki gayi ho (purane compatibility ke liye)
+        else if (trackId) {
+            const trackResponse = await axios.get(`https://api-v2.soundcloud.com/tracks/${trackId}?client_id=${dynamicId}`);
+            targetTrack = trackResponse.data;
+        } 
+        // Agar dono nahi hain toh error
+        else {
+            res.setHeader('Content-Type', 'application/json');
+            return res.status(400).json({ error: "Please provide either a 'query' or an 'id' parameter." });
         }
 
-        return res.status(404).json({ success: false, message: "No songs found." });
+        // Streaming Link Extraction logic
+        if (targetTrack) {
+            const progressiveTranscoding = targetTrack.media?.transcodings?.find(
+                t => t.format.protocol === 'progressive'
+            );
+
+            if (progressiveTranscoding && progressiveTranscoding.url) {
+                const streamAuthResponse = await axios.get(`${progressiveTranscoding.url}?client_id=${dynamicId}`);
+                
+                if (streamAuthResponse.data && streamAuthResponse.data.url) {
+                    // DIRECT AUDIO REDIRECT: Seedhe gaana chalega, koi json nahi!
+                    return res.redirect(streamAuthResponse.data.url);
+                }
+            }
+        }
+
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(404).json({ error: "Audio track could not be fetched or played." });
 
     } catch (error) {
-        return res.status(500).json({ error: "Dynamic SoundCloud Search failed", details: error.message });
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(500).json({ error: "Direct playback failed", details: error.message });
     }
 });
 
-// ROUTE 2: Play Route (With Dynamic Client ID)
-app.get('/play', async (req, res) => {
-    const trackId = req.query.id;
-
-    if (!trackId) {
-        res.setHeader('Content-Type', 'application/json');
-        return res.status(400).json({ error: "Please provide a track 'id' parameter." });
-    }
-
+// Search route ko backup ke liye choda hai agar kabhi metadata (image/title) chahiye ho
+app.get('/search', async (req, res) => {
+    const songQuery = req.query.query;
+    res.setHeader('Content-Type', 'application/json');
+    if (!songQuery) return res.status(400).json({ error: "Please provide a 'query' parameter." });
     try {
         const dynamicId = await getFreshClientId();
-
-        const trackResponse = await axios.get(`https://api-v2.soundcloud.com/tracks/${trackId}?client_id=${dynamicId}`);
-        const trackData = trackResponse.data;
-        
-        const progressiveTranscoding = trackData.media?.transcodings?.find(
-            t => t.format.protocol === 'progressive'
-        );
-
-        if (progressiveTranscoding && progressiveTranscoding.url) {
-            const streamAuthResponse = await axios.get(`${progressiveTranscoding.url}?client_id=${dynamicId}`);
-            
-            if (streamAuthResponse.data && streamAuthResponse.data.url) {
-                return res.redirect(streamAuthResponse.data.url);
-            }
+        const response = await axios.get(`https://api-v2.soundcloud.com/search/tracks`, { params: { q: songQuery, client_id: dynamicId, limit: 10 } });
+        if (response.data?.collection?.length > 0) {
+            const results = response.data.collection.map(track => ({
+                id: track.id,
+                title: track.title,
+                album: track.publisher_metadata?.album_title || "Single",
+                image: track.artwork_url ? track.artwork_url.replace('large', 't500x500') : 'https://soundcloud.com/favicon.ico',
+                artist: track.user?.username || "Unknown Artist",
+                stream_url: `https://${req.get('host')}/play?id=${track.id}`
+            }));
+            return res.status(200).json({ success: true, results });
         }
-
-        res.setHeader('Content-Type', 'application/json');
-        return res.status(404).json({ error: "Direct audio stream link not found." });
-
-    } catch (error) {
-        res.setHeader('Content-Type', 'application/json');
-        return res.status(500).json({ error: "Playback failed", details: error.message });
-    }
+        return res.status(404).json({ success: false, message: "No songs found." });
+    } catch (error) { return res.status(500).json({ error: "Search failed", details: error.message }); }
 });
 
 module.exports = app;
