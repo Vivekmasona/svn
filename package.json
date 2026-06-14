@@ -1,7 +1,7 @@
 {
-  "name": "yt-audio-streamer",
+  "name": "jiosaavn-audio-streamer",
   "version": "1.0.0",
-  "description": "YouTube direct audio streaming on Vercel",
+  "description": "Bina kisi limit aur block ke direct JioSaavn audio streaming",
   "main": "api/index.js",
   "scripts": {
     "start": "node api/index.js"
