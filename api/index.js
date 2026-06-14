@@ -4,10 +4,10 @@ const app = express();
 
 app.use(express.json());
 
-// SoundCloud ki default public Client ID (Yeh streaming aur search ke liye use hoti hai)
+// SoundCloud Public Client ID
 const CLIENT_ID = '95f793159e1e1d23472d4b9f298642ca';
 
-// ROUTE 1: SoundCloud Search
+// ROUTE 1: SoundCloud Search (Simplified with ID)
 app.get('/search', async (req, res) => {
     const songQuery = req.query.query;
     res.setHeader('Content-Type', 'application/json');
@@ -17,7 +17,6 @@ app.get('/search', async (req, res) => {
     }
 
     try {
-        // SoundCloud public tracks search API
         const response = await axios.get(`https://api-v2.soundcloud.com/search/tracks`, {
             params: {
                 q: songQuery,
@@ -30,13 +29,14 @@ app.get('/search', async (req, res) => {
 
         if (data && data.collection && data.collection.length > 0) {
             const results = data.collection.map(track => {
-                const playUrl = `https://${req.get('host')}/play?track_url=${encodeURIComponent(track.permalink_url)}`;
+                // Ab hum query me track_url nahi, seedhe Track ID bhejenge
+                const playUrl = `https://${req.get('host')}/play?id=${track.id}`;
                 
                 return {
                     id: track.id,
                     title: track.title,
                     album: track.publisher_metadata?.album_title || "Single",
-                    image: track.artwork_url ? track.artwork_url.replace('large', 't500x500') : 'https://soundcloud.com/favicon.ico', // High Quality Image
+                    image: track.artwork_url ? track.artwork_url.replace('large', 't500x500') : 'https://soundcloud.com/favicon.ico',
                     artist: track.user?.username || "Unknown Artist",
                     stream_url: playUrl
                 };
@@ -52,43 +52,36 @@ app.get('/search', async (req, res) => {
     }
 });
 
-// ROUTE 2: SoundCloud Play/Stream Redirect
+// ROUTE 2: SoundCloud Play (Direct Track ID Streaming)
 app.get('/play', async (req, res) => {
-    const trackUrl = req.query.track_url;
+    const trackId = req.query.id;
 
-    if (!trackUrl) {
+    if (!trackId) {
         res.setHeader('Content-Type', 'application/json');
-        return res.status(400).json({ error: "Please provide a 'track_url' parameter." });
+        return res.status(400).json({ error: "Please provide a track 'id' parameter (e.g. /play?id=TRACK_ID)." });
     }
 
     try {
-        // 1. Track URL se stream media protocols nikalna
-        const resolveResponse = await axios.get(`https://api-v2.soundcloud.com/resolve`, {
-            params: {
-                url: trackUrl,
-                client_id: CLIENT_ID
-            }
-        });
-
-        const trackData = resolveResponse.data;
+        // Direct track ID se stream link fetch karna
+        const trackResponse = await axios.get(`https://api-v2.soundcloud.com/tracks/${trackId}?client_id=${CLIENT_ID}`);
+        const trackData = trackResponse.data;
         
-        // Progressive HTTP stream format dhoondhna (.mp3 link ke liye)
+        // Progressive (.mp3) format nikalna
         const progressiveTranscoding = trackData.media?.transcodings?.find(
             t => t.format.protocol === 'progressive'
         );
 
         if (progressiveTranscoding && progressiveTranscoding.url) {
-            // 2. Direct secure mp3 streaming link fetch karna
             const streamAuthResponse = await axios.get(`${progressiveTranscoding.url}?client_id=${CLIENT_ID}`);
             
             if (streamAuthResponse.data && streamAuthResponse.data.url) {
-                // DIRECT PLAY: Browser seedhe mp3 track play kar dega bina kisi block ke
+                // DIRECT PLAY: Seedhe mp3 stream par redirect
                 return res.redirect(streamAuthResponse.data.url);
             }
         }
 
         res.setHeader('Content-Type', 'application/json');
-        return res.status(404).json({ error: "Direct audio stream link not found for this track." });
+        return res.status(404).json({ error: "Direct audio stream link not found for this track ID." });
 
     } catch (error) {
         res.setHeader('Content-Type', 'application/json');
