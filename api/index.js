@@ -1,42 +1,34 @@
-
 const express = require('express');
 const axios = require('axios');
 const app = express();
 
-// JSON response by default
 app.use(express.json());
 
-// ROUTE 1: Gaana Search Karne Ke Liye
+// ROUTE 1: Gaana Search Karne Ke Liye (Fixed Stream URL)
 app.get('/search', async (req, res) => {
     const songQuery = req.query.query;
     res.setHeader('Content-Type', 'application/json');
 
     if (!songQuery) {
-        return res.status(400).json({ error: "Please provide a 'query' parameter (e.g. /search?query=tum hi ho)" });
+        return res.status(400).json({ error: "Please provide a 'query' parameter." });
     }
 
     try {
-        // Saavn ke internal open API endpoint ko hit karenge (No Key Required)
         const response = await axios.get(`https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMeta=1&query=${encodeURIComponent(songQuery)}`);
-        
         const data = response.data;
         
         if (data && data.songs && data.songs.data.length > 0) {
             const results = data.songs.data.map(song => {
-                // High quality 320kbps audio URL ke liye token formats
-                // JioSaavn ke cdn urls bina kisi proxy restriction ke browser me direct play hote hain
-                let mediaUrl = song.media_url || '';
-                if (mediaUrl) {
-                    mediaUrl = mediaUrl.replace('_96.mp4', '_320.mp4').replace('_160.mp4', '_320.mp4');
-                }
+                // Ab hum perma_url ke jhanjhat me nahi padenge, direct ID bhejenge play route ko
+                const playUrl = `https://${req.get('host')}/play?id=${song.id}`;
                 
                 return {
                     id: song.id,
-                    title: song.title.replace(/&quot;/g, '"'),
-                    album: song.album,
-                    image: song.image.replace('150x150', '500x500'), // High Quality Image
+                    title: song.title.replace(/&quot;/g, '"').replace(/&#039;/g, "'"),
+                    album: song.album.replace(/&quot;/g, '"').replace(/&#039;/g, "'"),
+                    image: song.image.replace('50x50', '500x500'), // Album Art High Quality
                     artist: song.more_info.music || song.description,
-                    stream_url: mediaUrl || `https://svn-three.vercel.app/play?url=${encodeURIComponent(song.perma_url)}`
+                    stream_url: playUrl
                 };
             });
 
@@ -50,32 +42,34 @@ app.get('/search', async (req, res) => {
     }
 });
 
-// ROUTE 2: Direct URL Se Play/Redirect Karne Ke Liye
+// ROUTE 2: Direct Song ID Se Play/Redirect Karne Ke Liye (Fixed & Super Stable)
 app.get('/play', async (req, res) => {
-    const songUrl = req.query.url;
+    const songId = req.query.id;
 
-    if (!songUrl) {
+    if (!songId) {
         res.setHeader('Content-Type', 'application/json');
-        return res.status(400).json({ error: "Please provide a JioSaavn song 'url' parameter." });
+        return res.status(400).json({ error: "Please provide a song 'id' parameter (e.g. /play?id=YiVML4Zo)." });
     }
 
     try {
-        // Gaane ki permalink se direct streaming link nikalna
-        const response = await axios.get(`https://www.jiosaavn.com/api.php?__call=webapi.get&token=${songUrl.split('/song/')[1].split('/')[1]}&type=song&_format=json&_marker=0&api_version=4&ctx=web6dot0`);
-        
+        // ID se details nikalne ki official web API call
+        const response = await axios.get(`https://www.jiosaavn.com/api.php?__call=webapi.get&pids=${songId}&type=song&_format=json&_marker=0&api_version=4&ctx=web6dot0`);
         const songData = response.data;
-        const songId = Object.keys(songData)[0];
         
-        if (songData[songId] && songData[songId].media_urls) {
-            // Best quality 320kbps ya 160kbps select karein
-            const directAudio = songData[songId].media_urls.hifi_320 || songData[songId].media_urls.preview;
+        if (songData && songData[songId] && songData[songId].media_urls) {
+            // Best Quality Audio select karein (320kbps ya fir aur koi working preview)
+            const directAudio = songData[songId].media_urls.hifi_320 || 
+                                songData[songId].media_urls.premium_320 || 
+                                songData[songId].media_urls.preview;
             
-            // DIRECT PLAY: Browser ko seedhe .mp4/.mp3 download link pr bhej do, player bina rukaawat ke play karega
-            return res.redirect(directAudio);
+            if (directAudio) {
+                // DIRECT PLAY: Browser seedhe audio play karne lagega
+                return res.redirect(directAudio);
+            }
         }
 
         res.setHeader('Content-Type', 'application/json');
-        return res.status(404).json({ error: "Direct stream link not found for this URL." });
+        return res.status(404).json({ error: "Direct stream link not found for this Song ID." });
 
     } catch (error) {
         res.setHeader('Content-Type', 'application/json');
@@ -84,3 +78,4 @@ app.get('/play', async (req, res) => {
 });
 
 module.exports = app;
+
