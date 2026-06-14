@@ -1,6 +1,6 @@
 {
   "version": 2,
   "routes": [
-    { "source": "/api/get-song", "dest": "/api/get-song.js" }
+    { "source": "/api", "dest": "/api/index.js" }
   ]
 }
