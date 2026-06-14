@@ -13,41 +13,42 @@ app.get('/play', async (req, res) => {
     }
 
     try {
-        // Cobalt v10 ka naya endpoint aur sahi request body format
-        const response = await axios.post('https://api.cobalt.tools/', {
+        // Cobalt v10/v11 standards ke mutabik 'https://sunny.imput.net/' par POST request bhejenge
+        const response = await axios.post('https://sunny.imput.net/', {
             url: youtubeUrl,
-            videoQuality: '720', // Default quality
+            videoQuality: '720',
             audioFormat: 'mp3',   // Hame audio chahiye
             audioBitrate: '128',
             filenamePattern: 'classic',
-            isAudioOnly: true,    // V10 me audio only ke liye ye key zaroori hai
+            isAudioOnly: true,    // Audio separate nikalne ke liye
             isNoTTWatermark: true
         }, {
             headers: {
                 'Accept': 'application/json',
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                // User-Agent dena zaroori hai taaki request block na ho
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         });
 
         const data = response.data;
 
-        // Cobalt v10 response status check karne ke liye 'status' key deta hai
-        // Status 'redirect' ya 'stream' hone par direct 'url' milti hai
+        // Agar Sunny instance ne successful processing ke baad direct link de diya
         if (data && data.url) {
             // DIRECT PLAY: Browser ko direct stream link par redirect kar do
             return res.redirect(data.url);
         } else {
             return res.status(500).json({
-                error: "Could not fetch direct stream URL from Cobalt v10.",
-                cobalt_response: data
+                error: "Could not fetch direct stream URL from Sunny instance.",
+                sunny_response: data
             });
         }
 
     } catch (error) {
-        console.error("Cobalt v10 Streaming Error:", error.message);
+        console.error("Sunny Instance Error:", error.message);
         return res.status(500).json({
             error: "Internal Server Error",
-            message: "Failed to stream audio via Cobalt v10 engine.",
+            message: "Failed to stream audio via Sunny Cobalt instance.",
             details: error.response ? error.response.data : error.message
         });
     }
