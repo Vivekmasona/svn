@@ -4,7 +4,27 @@ const app = express();
 
 app.use(express.json());
 
-// ROUTE 1: Search Route
+// Helper function: Encrypted media URL ko decrypt karne ka official algorithm
+function decryptUrl(encryptedUrl) {
+    if (!encryptedUrl) return '';
+    try {
+        // JioSaavn ka standard public DES decryption binary logic
+        const crypto = require('crypto');
+        const key = '38346a3435323231'; // Official Saavn Secret Key
+        const decipher = crypto.createDecipheriv('des-ecb', key, '');
+        decipher.setAutoPadding(true);
+        let decrypted = decipher.update(encryptedUrl, 'base64', 'utf8');
+        decrypted += decipher.final('utf8');
+        
+        // Link ko clean aur stream-ready banana
+        return decrypted.replace(/_96\.mp4/_320\.mp4/g).replace(/_160\.mp4/_320\.mp4/g);
+    } catch (e) {
+        // Agar decryption fail ho to purana format return karein
+        return encryptedUrl.replace('_96.mp4', '_320.mp4');
+    }
+}
+
+// ROUTE 1: Official JioSaavn Search
 app.get('/search', async (req, res) => {
     const songQuery = req.query.query;
     res.setHeader('Content-Type', 'application/json');
@@ -14,28 +34,20 @@ app.get('/search', async (req, res) => {
     }
 
     try {
-        // Saavn Dev API search wrapper ka use karenge jo hamesha free aur up-to-date rehta hai
-        const response = await axios.get(`https://saavn.dev/api/search/songs?query=${encodeURIComponent(songQuery)}`);
+        // Direct JioSaavn.com official API endpoint (Yeh hamesha live rehta hai)
+        const response = await axios.get(`https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMeta=1&query=${encodeURIComponent(songQuery)}`);
         const data = response.data;
-
-        if (data && data.success && data.data && data.data.results.length > 0) {
-            const results = data.data.results.map(song => {
+        
+        if (data && data.songs && data.songs.data.length > 0) {
+            const results = data.songs.data.map(song => {
                 const playUrl = `https://${req.get('host')}/play?id=${song.id}`;
                 
-                // Artist name arrays se string banana
-                const artistName = song.artists && song.artists.primary && song.artists.primary.length > 0 
-                    ? song.artists.primary.map(a => a.name).join(', ') 
-                    : 'Unknown Artist';
-
-                // Best quality image nikalna 
-                const imageUrl = song.image && song.image.length > 0 ? song.image[song.image.length - 1].url : '';
-
                 return {
                     id: song.id,
-                    title: song.name,
-                    album: song.album ? song.album.name : 'Single',
-                    image: imageUrl,
-                    artist: artistName,
+                    title: song.title.replace(/&quot;/g, '"').replace(/&#039;/g, "'"),
+                    album: song.album.replace(/&quot;/g, '"').replace(/&#039;/g, "'"),
+                    image: song.image.replace('50x50', '500x500'), // High Quality 
+                    artist: song.more_info.music || song.description,
                     stream_url: playUrl
                 };
             });
@@ -46,12 +58,11 @@ app.get('/search', async (req, res) => {
         return res.status(404).json({ success: false, message: "No songs found." });
 
     } catch (error) {
-        console.error("Search Error:", error.message);
         return res.status(500).json({ error: "Search failed", details: error.message });
     }
 });
 
-// ROUTE 2: Play/Redirect Route (Bypassed & Decrypted)
+// ROUTE 2: Official Play/Redirect Route (Zero Third-Party Dependency)
 app.get('/play', async (req, res) => {
     const songId = req.query.id;
 
@@ -61,28 +72,35 @@ app.get('/play', async (req, res) => {
     }
 
     try {
-        // Direct Song ID se detailed info fetch karna jisme decrypted download links hote hain
-        const response = await axios.get(`https://saavn.dev/api/songs/${songId}`);
-        const data = response.data;
-
-        if (data && data.success && data.data && data.data.length > 0) {
-            const songObj = data.data[0];
+        // JioSaavn ka official song details checker v4
+        const response = await axios.get(`https://www.jiosaavn.com/api.php?__call=webapi.get&pids=${songId}&type=song&_format=json&_marker=0&api_version=4&ctx=web6dot0`);
+        const songData = response.data;
+        
+        if (songData && songData[songId]) {
+            const song = songData[songId];
             
-            // downloadUrl array me alag-alag qualities hoti hain (96kbps se lekar 320kbps tak)
-            // Hum array ka aakhri element (sabse high quality 320kbps) select karenge
-            if (songObj.downloadUrl && songObj.downloadUrl.length > 0) {
-                const directAudioUrl = songObj.downloadUrl[songObj.downloadUrl.length - 1].url;
-                
-                // DIRECT PLAY: Browser ko seedhe gaane ke download/stream link pr bhej do
-                return res.redirect(directAudioUrl);
+            // JioSaavn apne v4 response me direct 'media_preview_url' ya encrypted URL deta hai
+            let streamUrl = '';
+            
+            if (song.encrypted_media_url) {
+                // Agar URL encrypted hai, to hum use local script se khud decrypt karenge
+                streamUrl = decryptUrl(song.encrypted_media_url);
+            } else if (song.media_urls && song.media_urls.preview) {
+                streamUrl = song.media_urls.preview;
+            } else if (song.media_preview_url) {
+                streamUrl = song.media_preview_url.replace('preview.saavncdn.com', 'aac.saavncdn.com');
+            }
+
+            if (streamUrl) {
+                // DIRECT PLAY: Kisi third-party server ka koi lena-dena nahi, direct audio play!
+                return res.redirect(streamUrl);
             }
         }
 
         res.setHeader('Content-Type', 'application/json');
-        return res.status(404).json({ error: "Direct stream link could not be decrypted for this Song ID." });
+        return res.status(404).json({ error: "Audio link not found in official response." });
 
     } catch (error) {
-        console.error("Playback Error:", error.message);
         res.setHeader('Content-Type', 'application/json');
         return res.status(500).json({ error: "Playback extraction failed", details: error.message });
     }
