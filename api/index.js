@@ -3,27 +3,35 @@ const axios = require('axios');
 const app = express();
 
 app.get('/play', async (req, res) => {
-    let youtubeUrl = req.query.url;
-
-    // Response format hamesha JSON rahega
+    // Response headers hamesha JSON ke liye set karein
     res.setHeader('Content-Type', 'application/json');
 
-    if (!youtubeUrl) {
-        return res.status(400).json({ error: "Please provide a 'url' query parameter." });
-    }
-
     try {
-        // 1. YouTube URL se Video ID nikalna (e.g., eOeTkxolrnM)
-        let videoId = '';
-        if (youtubeUrl.includes('youtu.be/')) {
-            videoId = youtubeUrl.split('youtu.be/')[1].split('?')[0];
-        } else if (youtubeUrl.includes('v=')) {
-            videoId = youtubeUrl.split('v=')[1].split('&')[0];
-        } else {
-            videoId = youtubeUrl; // Agar user ne direct ID hi pass kar di ho
+        let youtubeUrl = req.query.url;
+
+        if (!youtubeUrl) {
+            return res.status(400).json({ error: "Please provide a 'url' query parameter." });
         }
 
-        // 2. Naye API ke liye options configure karein
+        // 1. Safe Video ID Extraction (Taaki crash na ho)
+        let videoId = '';
+        try {
+            if (youtubeUrl.includes('youtu.be/')) {
+                videoId = youtubeUrl.split('youtu.be/')[1].split('?')[0];
+            } else if (youtubeUrl.includes('v=')) {
+                videoId = youtubeUrl.split('v=')[1].split('&')[0];
+            } else {
+                videoId = youtubeUrl; // Agar direct ID daali ho
+            }
+        } catch (urlError) {
+            return res.status(400).json({ error: "Invalid YouTube URL format." });
+        }
+
+        if (!videoId) {
+            return res.status(400).json({ error: "Could not extract Video ID from the provided URL." });
+        }
+
+        // 2. API Options
         const options = {
             method: 'GET',
             url: 'https://youtube-video-and-shorts-downloader1.p.rapidapi.com/youtube/v3/video/details',
@@ -40,18 +48,26 @@ app.get('/play', async (req, res) => {
             }
         };
 
-        // 3. API Call karein
+        // 3. API Request with Axios
         const response = await axios.request(options);
-        const data = response.data;
-
-        // 4. Sahi data user ko return karein
+        
+        // Response send karein
         return res.status(200).json({
             status: "Success",
-            message: "Data fetched successfully from new API",
             video_id: videoId,
-            // Is naye API ka jo bhi raw response hoga wo poora yahan dikhega
-            api_data: data 
+            api_data: response.data
         });
 
+    } catch (error) {
+        // Kisi bhi tareeqay ka error aane par server crash nahi hoga, ye response bhej dega
+        console.error("Vercel Function Error: ", error.message);
+        
+        return res.status(error.response ? error.response.status : 500).json({
+            status: "Error",
+            message: error.message,
+            api_details: error.response ? error.response.data : "No external details available"
+        });
     }
-    
+});
+
+module.exports = app;
