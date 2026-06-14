@@ -1,11 +1,12 @@
 const express = require('express');
 const ytSearch = require('yt-search');
 const ytdl = require('@distube/ytdl-core');
+const path = require('path');
 const app = express();
 
 app.use(express.json());
 
-// MAIN ROUTE: Play Route using Native Mobile Client Simulation
+// ROUTE 1: Direct Search and Play (Vercel Fixed)
 app.get('/play', async (req, res) => {
     const songQuery = req.query.query;
 
@@ -24,34 +25,33 @@ app.get('/play', async (req, res) => {
             return res.status(404).json({ error: "No songs found on YouTube." });
         }
 
-        // Top original video link
         const videoUrl = videos[0].url;
 
-        // 2. Mobile App Format Options (Bina Cookie ke bypass karne ke liye)
+        // VERCEL EROFS FIX: Debugging aur client files ko serverless writeable '/tmp' directory me redirect kiya
         const streamOptions = {
             filter: 'audioonly',
             quality: 'highestaudio',
             requestOptions: {
                 headers: {
-                    // Mobile app ka user agent aur headers simulation
                     'User-Agent': 'com.google.android.youtube/19.07.32 (Linux; U; Android 11; en_US) Max/100',
-                    'X-YouTube-Client-Name': '3', // Android native client id
+                    'X-YouTube-Client-Name': '3',
                     'X-YouTube-Client-Version': '19.07.32'
                 }
             },
-            // YouTube ka player client override (Android native format download proxy)
-            playerClients: ['ANDROID_VR', 'YTMUSIC'] 
+            playerClients: ['ANDROID_VR', 'YTMUSIC'],
+            // Agar ytdl file banana chahe toh error na aaye, temporary path override
+            options: {
+                fileCacheDir: path.join('/tmp') 
+            }
         };
 
-        // 3. Audio format ka info nikalna
+        // 2. Audio format nikalna
         const info = await ytdl.getInfo(videoUrl, streamOptions);
         const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
-        
-        // Sabse best direct stream url nikalna (jo direct streaming url format ho)
         const directAudioUrl = audioFormats[0]?.url;
 
         if (directAudioUrl) {
-            // DIRECT REDIRECT: Seedhe bina cookie ke working link par redirect karo
+            // DIRECT REDIRECT: Bina read-only crash hue direct play
             return res.redirect(directAudioUrl);
         }
 
@@ -87,4 +87,3 @@ app.get('/search', async (req, res) => {
 });
 
 module.exports = app;
-
