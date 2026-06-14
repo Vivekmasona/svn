@@ -2,18 +2,17 @@ const express = require('express');
 const axios = require('axios');
 const app = express();
 
-// Helper function: Jo th thodi der wait karne mein madad karega
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 app.get('/play', async (req, res) => {
     let youtubeUrl = req.query.url;
+
+    // Response hamesha JSON format mein rahega
+    res.setHeader('Content-Type', 'application/json');
 
     if (!youtubeUrl) {
         return res.status(400).json({ error: "Please provide a 'url' query parameter." });
     }
 
     try {
-        // Initial API Call
         const options = {
             method: 'GET',
             url: 'https://youtube-info-download-api.p.rapidapi.com/ajax/download.php',
@@ -33,57 +32,39 @@ app.get('/play', async (req, res) => {
             }
         };
 
-        let response = await axios.request(options);
-        let data = response.data;
+        const response = await axios.request(options);
+        const data = response.data;
 
-        // POLLING LOGIC: Agar content nahi mila aur progress_url mili hai, toh loop chalao
-        let attempts = 0;
-        const maxAttempts = 10; // Max 10 baar try karega (approx 20-30 seconds)
-
-        while ((!data.content || data.success === false) && data.progress_url && attempts < maxAttempts) {
-            console.log(`Audio is processing... Attempt ${attempts + 1}`);
-            
-            // 3 second ka wait karein taaki server par load na pade
-            await delay(3000); 
-            
-            // Us progress_url par request bhejein status check karne ke liye
-            const progressResponse = await axios.get(data.progress_url, {
-                headers: {
-                    'x-rapidapi-key': options.headers['x-rapidapi-key'],
-                    'x-rapidapi-host': options.headers['x-rapidapi-host']
-                }
+        // Ab hum binary file download nahi karwayenge, seedhe response ka data screen par show karenge
+        if (data.success) {
+            return res.status(200).json({
+                status: "Success",
+                message: "API responded successfully",
+                video_title: data.title || (data.info && data.info.title) || "Unknown Title",
+                thumbnail: data.thumbnail_url || (data.info && data.info.thumbnail_url) || null,
+                // Agar content ready hai toh uski length dikhayega, nahi toh null
+                has_content: !!data.content,
+                content_length: data.content ? data.content.length : 0,
+                progress_url: data.progress_url || null,
+                // Agar aapko raw content string dekhni hai toh is niche wali line ko uncomment kar sakte hain:
+                // raw_content: data.content || null
             });
-            
-            data = progressResponse.data;
-            attempts++;
-        }
-
-        // Final Check: Agar loop ke baad data.content mil gaya
-        if (data.success && data.content) {
-            const audioBuffer = Buffer.from(data.content, 'base64');
-
-            // Set Headers for proper MP3 Download
-            res.setHeader('Content-Type', 'audio/mpeg');
-            res.setHeader('Content-Disposition', 'attachment; filename="audio.mp3"');
-            res.setHeader('Content-Length', audioBuffer.length); // File size batane ke liye
-
-            return res.send(audioBuffer);
         } else {
-            // Agar fir bhi ready nahi hua toh error return karein, kharab file nahi!
-            res.setHeader('Content-Type', 'application/json');
-            return res.status(500).json({
-                error: "Timeout or Processing Failed",
-                message: "Server took too long to convert this video. Please try again.",
+            return res.status(400).json({
+                status: "Failed",
+                message: "API failed to process this video link.",
                 api_response: data
             });
         }
 
     } catch (error) {
         console.error(error);
-        res.setHeader('Content-Type', 'application/json');
-        return res.status(500).json({ error: "Internal Server Error", message: error.message });
+        return res.status(500).json({ 
+            status: "Error",
+            error: "Internal Server Error", 
+            message: error.message 
+        });
     }
 });
 
 module.exports = app;
-
