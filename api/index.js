@@ -2,39 +2,21 @@ const express = require("express");
 const axios = require("axios");
 
 const app = express();
-
 app.use(express.json());
 
 let CLIENT_ID = null;
 let LAST_UPDATE = 0;
 
-// Cache client_id for 1 hour
+// --- Helper: Get Client ID ---
 async function getClientId() {
-    if (CLIENT_ID && (Date.now() - LAST_UPDATE) < 3600000) {
-        return CLIENT_ID;
-    }
-
+    if (CLIENT_ID && (Date.now() - LAST_UPDATE) < 3600000) return CLIENT_ID;
     try {
-        const home = await axios.get("https://soundcloud.com", {
-            headers: {
-                "User-Agent": "Mozilla/5.0"
-            }
-        });
-
+        const home = await axios.get("https://soundcloud.com", { headers: { "User-Agent": "Mozilla/5.0" } });
         const html = home.data;
-
-        const files = [
-            ...html.matchAll(/src="([^"]+\/assets\/[^"]+\.js)"/g)
-        ].map(v => v[1]);
-
+        const files = [...html.matchAll(/src="([^"]+\/assets\/[^"]+\.js)"/g)].map(v => v[1]);
         for (const file of files.reverse().slice(0, 5)) {
-
             const js = await axios.get(file);
-
-            const match = js.data.match(
-                /client_id\s*:\s*"([a-zA-Z0-9]{32})"/
-            );
-
+            const match = js.data.match(/client_id\s*:\s*"([a-zA-Z0-9]{32})"/);
             if (match) {
                 CLIENT_ID = match[1];
                 LAST_UPDATE = Date.now();
@@ -42,223 +24,78 @@ async function getClientId() {
             }
         }
     } catch (e) {}
-
     CLIENT_ID = "2t9mqaC7aZrr6v6scvW6Y06Z7v0K8A1Z";
     LAST_UPDATE = Date.now();
-
     return CLIENT_ID;
 }
-// --- DOWNLOAD ROUTE ---
-app.get("/download", async (req, res) => {
+
+// --- Helper: Get ID by Name ---
+async function getTrackIdByName(query) {
+    const client_id = await getClientId();
+    const res = await axios.get("https://api-v2.soundcloud.com/search/tracks", {
+        params: { q: query, client_id, limit: 1 }
+    });
+    return res.data.collection[0] ? res.data.collection[0] : null;
+}
+
+// --- Play Endpoint: play?name=SongName ---
+app.get("/play", async (req, res) => {
+    const name = req.query.name;
     const id = req.query.id;
-    if (!id) return res.status(400).json({ error: "id required" });
 
     try {
+        let track;
+        if (name) {
+            track = await getTrackIdByName(name);
+        } else if (id) {
+            const client_id = await getClientId();
+            const resData = await axios.get(`https://api-v2.soundcloud.com/tracks/${id}`, { params: { client_id } });
+            track = resData.data;
+        } else {
+            return res.status(400).json({ error: "name or id required" });
+        }
+
+        if (!track) return res.status(404).json({ message: "Song not found" });
+
         const client_id = await getClientId();
-        
-        // 1. Track info lo
-        const track = await axios.get(`https://api-v2.soundcloud.com/tracks/${id}`, { params: { client_id } });
-        const trackTitle = track.data.title.replace(/[^a-z0-9]/gi, '_').toLowerCase(); // Title clean kiya
-        
-        // 2. Stream URL find karo
-        const progressive = track.data.media?.transcodings?.find(x => x.format.protocol === "progressive");
+        const progressive = track.media?.transcodings?.find(x => x.format.protocol === "progressive");
         if (!progressive) return res.status(404).json({ message: "Stream not found" });
 
-        // 3. Auth URL get karo
         const auth = await axios.get(progressive.url, { params: { client_id } });
-        const streamUrl = auth.data.url;
-
-        // 4. Download force karo
-        const response = await axios({
-            method: 'get',
-            url: streamUrl,
-            responseType: 'stream'
-        });
-
-        res.setHeader('Content-Disposition', `attachment; filename="${trackTitle}.mp3"`);
-        res.setHeader('Content-Type', 'audio/mpeg');
+        if (auth.data.url) return res.redirect(auth.data.url);
         
-        response.data.pipe(res);
-
+        res.status(404).json({ message: "No playable stream" });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// SEARCH
-app.get("/search", async (req, res) => {
-
-    const q = req.query.query;
-
-    if (!q) {
-        return res.status(400).json({
-            success: false,
-            message: "query required"
-        });
-    }
+// --- Download Endpoint: dl?name=SongName ---
+app.get("/dl", async (req, res) => {
+    const name = req.query.name;
+    if (!name) return res.status(400).json({ error: "name required" });
 
     try {
+        const track = await getTrackIdByName(name);
+        if (!track) return res.status(404).json({ message: "Song not found" });
 
         const client_id = await getClientId();
+        const progressive = track.media?.transcodings?.find(x => x.format.protocol === "progressive");
+        if (!progressive) return res.status(404).json({ message: "Stream not found" });
 
-        const r = await axios.get(
-            "https://api-v2.soundcloud.com/search/tracks",
-            {
-                params: {
-                    q,
-                    client_id,
-                    limit: 10
-                }
-            }
-        );
-
-        const list = (r.data.collection || []).map(track => ({
-            id: track.id,
-            title: track.title,
-            artist: track.user?.username || "Unknown",
-            image: track.artwork_url
-                ? track.artwork_url.replace("large", "t500x500")
-                : null,
-            stream: `/play?id=${track.id}`
-        }));
-
-        res.json({
-            success: true,
-            results: list
-        });
-
+        const auth = await axios.get(progressive.url, { params: { client_id } });
+        
+        const response = await axios({ method: 'get', url: auth.data.url, responseType: 'stream' });
+        
+        const safeName = track.title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        res.setHeader('Content-Disposition', `attachment; filename="${safeName}.mp3"`);
+        res.setHeader('Content-Type', 'audio/mpeg');
+        
+        response.data.pipe(res);
     } catch (e) {
-
-        res.status(500).json({
-            success: false,
-            error: e.message
-        });
-
+        res.status(500).json({ error: e.message });
     }
-
-});
-
-// PLAY
-app.get("/play", async (req, res) => {
-
-    const query = req.query.query;
-    const id = req.query.id;
-
-    try {
-
-        const client_id = await getClientId();
-
-        let tracks = [];
-
-        if (query) {
-
-            const search = await axios.get(
-                "https://api-v2.soundcloud.com/search/tracks",
-                {
-                    params: {
-                        q: query,
-                        client_id,
-                        limit: 15
-                    }
-                }
-            );
-
-            tracks = search.data.collection || [];
-
-        } else if (id) {
-
-            const track = await axios.get(
-                `https://api-v2.soundcloud.com/tracks/${id}`,
-                {
-                    params: {
-                        client_id
-                    }
-                }
-            );
-
-            tracks = [track.data];
-
-        } else {
-
-            return res.status(400).json({
-                error: "query or id required"
-            });
-
-        }
-
-        const blocked = [
-            "slowed",
-            "reverb",
-            "remix",
-            "nightcore",
-            "bootleg",
-            "sped up",
-            "8d"
-        ];
-
-        tracks.sort((a, b) => {
-
-            const aa = blocked.some(x =>
-                a.title.toLowerCase().includes(x)
-            );
-
-            const bb = blocked.some(x =>
-                b.title.toLowerCase().includes(x)
-            );
-
-            return aa - bb;
-
-        });
-
-        for (const track of tracks) {
-
-            const progressive =
-                track.media?.transcodings?.find(
-                    x => x.format.protocol === "progressive"
-                );
-
-            if (!progressive) continue;
-
-            try {
-
-                const auth = await axios.get(
-                    progressive.url,
-                    {
-                        params: {
-                            client_id
-                        }
-                    }
-                );
-
-                if (auth.data.url) {
-                    return res.redirect(auth.data.url);
-                }
-
-            } catch (e) {}
-
-        }
-
-        res.status(404).json({
-            success: false,
-            message: "No playable stream found"
-        });
-
-    } catch (e) {
-
-        res.status(500).json({
-            success: false,
-            error: e.message
-        });
-
-    }
-
 });
 
 const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-    console.log("Running on port " + PORT);
-});
-
-module.exports = app;
-
+app.listen(PORT, () => console.log("Server running on port " + PORT));
