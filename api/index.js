@@ -36,46 +36,44 @@ async function getClientId() {
     return CLIENT_ID;
 }
 
-// --- Helper: Clean Title (Removes noise from YT titles) ---
+// --- Updated Helper: Better Cleaning ---
 function cleanSongTitle(title) {
     if (!title) return "";
+    // Sirf brackets aur extra junk hatayenge, lekin length maintain rakhenge
     return title
-        .replace(/(\[.*?\]|\(.*?\))/g, "") 
+        .replace(/(\[.*?\]|\(.*?\))/g, "")
         .replace(/(official|video|lyrics|music|audio|hd|4k|remix|slowed|reverb)/gi, "")
-        .replace(/[^a-zA-Z0-9\s]/g, " ")
+        .replace(/[^a-zA-Z0-9\s-]/g, " ") 
         .replace(/\s+/g, " ")
-        .trim()
-        .split(" ").slice(0, 5).join(" "); 
+        .trim(); // Yahan .slice(0, 5) hata diya hai taaki poora naam search ho
 }
 
-// --- Route: Play Directly via YouTube ID ---
+// --- Updated Route: Match & Play ---
 app.get("/play-yt", async (req, res) => {
     const videoId = req.query.videoid;
     if (!videoId) return res.status(400).json({ success: false, message: "videoid required" });
 
     try {
-        // 1. YouTube se title fetch karo
         const ytRes = await axios.get(`https://vivekmasona-denocall-61.deno.dev/search?q=${videoId}`);
         const cleanTitle = cleanSongTitle(ytRes.data.title);
         
-        // 2. SoundCloud par search karo
         const client_id = await getClientId();
+        // Limit badha di taaki sahi match mil sake
         const scRes = await axios.get("https://api-v2.soundcloud.com/search/tracks", {
-            params: { q: cleanTitle, client_id, limit: 3 }
+            params: { q: cleanTitle, client_id, limit: 10 }
         });
 
         const tracks = scRes.data.collection || [];
         if (tracks.length === 0) return res.status(404).json({ message: "No song found" });
 
-        // 3. Pehla result play karo
-        const track = tracks[0];
+        // Logic: Jo title aapke search query se best match kare, use chuno
+        const track = tracks.sort((a, b) => b.playback_count - a.playback_count)[0];
+
         const progressive = track.media?.transcodings?.find(x => x.format.protocol === "progressive");
 
         if (progressive) {
             const auth = await axios.get(progressive.url, { params: { client_id } });
-            if (auth.data.url) {
-                return res.redirect(auth.data.url);
-            }
+            if (auth.data.url) return res.redirect(auth.data.url);
         }
 
         res.status(404).json({ message: "No playable stream found" });
@@ -83,6 +81,7 @@ app.get("/play-yt", async (req, res) => {
         res.status(500).json({ success: false, error: e.message });
     }
 });
+
 
 // --- SEARCH ---
 app.get("/search", async (req, res) => {
