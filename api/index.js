@@ -48,6 +48,42 @@ async function getClientId() {
 
     return CLIENT_ID;
 }
+// --- DOWNLOAD ROUTE ---
+app.get("/download", async (req, res) => {
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: "id required" });
+
+    try {
+        const client_id = await getClientId();
+        
+        // 1. Track info lo
+        const track = await axios.get(`https://api-v2.soundcloud.com/tracks/${id}`, { params: { client_id } });
+        const trackTitle = track.data.title.replace(/[^a-z0-9]/gi, '_').toLowerCase(); // Title clean kiya
+        
+        // 2. Stream URL find karo
+        const progressive = track.data.media?.transcodings?.find(x => x.format.protocol === "progressive");
+        if (!progressive) return res.status(404).json({ message: "Stream not found" });
+
+        // 3. Auth URL get karo
+        const auth = await axios.get(progressive.url, { params: { client_id } });
+        const streamUrl = auth.data.url;
+
+        // 4. Download force karo
+        const response = await axios({
+            method: 'get',
+            url: streamUrl,
+            responseType: 'stream'
+        });
+
+        res.setHeader('Content-Disposition', `attachment; filename="${trackTitle}.mp3"`);
+        res.setHeader('Content-Type', 'audio/mpeg');
+        
+        response.data.pipe(res);
+
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // SEARCH
 app.get("/search", async (req, res) => {
