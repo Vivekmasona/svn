@@ -40,46 +40,40 @@ async function getTrackIdByName(query) {
 
 
 
-// --- Download Endpoint with Poster Info ---
-app.get("/json", async (req, res) => {
+
+// --- Naya Endpoint: Info (Poster + Title + Stream) ---
+app.get("/info", async (req, res) => {
     const name = req.query.name;
     if (!name) return res.status(400).json({ error: "name required" });
 
     try {
+        // 1. Gaana search karo
         const track = await getTrackIdByName(name);
         if (!track) return res.status(404).json({ message: "Song not found" });
 
-        // Poster URL
+        // 2. Poster URL prepare karo
         const poster = track.artwork_url ? track.artwork_url.replace("large", "t500x500") : null;
 
-        // Agar user ?json=true likhe to poster aur download link ki info milegi
-        if (req.query.json === "true") {
-            const client_id = await getClientId();
-            const progressive = track.media?.transcodings?.find(x => x.format.protocol === "progressive");
-            const auth = await axios.get(progressive.url, { params: { client_id } });
-            
-            return res.json({
-                title: track.title,
-                poster: poster,
-                download_url: `/dl?name=${encodeURIComponent(name)}` // Download link
-            });
-        }
-
-        // Default: Direct Download
+        // 3. Stream URL nikalo
         const client_id = await getClientId();
         const progressive = track.media?.transcodings?.find(x => x.format.protocol === "progressive");
+        
         if (!progressive) return res.status(404).json({ message: "Stream not found" });
 
         const auth = await axios.get(progressive.url, { params: { client_id } });
-        const response = await axios({ method: 'get', url: auth.data.url, responseType: 'stream' });
-        
-        const safeName = track.title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        res.setHeader('Content-Disposition', `attachment; filename="${safeName}.mp3"`);
-        res.setHeader('Content-Type', 'audio/mpeg');
-        
-        response.data.pipe(res);
+
+        // 4. Sab kuch JSON mein return karo
+        res.json({
+            success: true,
+            title: track.title,
+            artist: track.user?.username || "Unknown",
+            poster: poster,
+            stream: auth.data.url,
+            download: `/dl?name=${encodeURIComponent(name)}`
+        });
+
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
