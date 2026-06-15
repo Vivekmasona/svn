@@ -42,6 +42,21 @@ async function getTrackIdByName(query) {
     const track = res.data.collection.find(t => t.artwork_url !== null) || res.data.collection[0];
     return track || null;
 }
+// Agar poster-embedding timeout ho raha hai, toh ye simple download method use karein
+app.get("/dl2", async (req, res) => {
+    const name = req.query.name;
+    const track = await getTrackIdByName(name);
+    if (!track) return res.status(404).send("Song not found");
+
+    const client_id = await getClientId();
+    const progressive = track.media?.transcodings?.find(x => x.format.protocol === "progressive");
+    const auth = await axios.get(progressive.url, { params: { client_id } });
+
+    // Direct pipe, no heavy processing
+    const response = await axios({ method: 'get', url: auth.data.url, responseType: 'stream' });
+    res.setHeader('Content-Disposition', `attachment; filename="${track.title.replace(/[^a-z0-9]/gi, '_')}.mp3"`);
+    response.data.pipe(res);
+});
 
 // Info Endpoint
 app.get("/info", async (req, res) => {
