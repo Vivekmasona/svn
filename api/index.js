@@ -1,227 +1,120 @@
-const express = require("express");
-const axios = require("axios");
-
+const express = require('express');
+const axios = require('axios');
 const app = express();
 
 app.use(express.json());
 
-let CLIENT_ID = null;
-let LAST_UPDATE = 0;
-
-// Cache client_id for 1 hour
-async function getClientId() {
-    if (CLIENT_ID && (Date.now() - LAST_UPDATE) < 3600000) {
-        return CLIENT_ID;
-    }
-
+// Function: Jo SoundCloud ke live script se fresh client_id dhoondh ke nikalega
+async function getFreshClientId() {
     try {
-        const home = await axios.get("https://soundcloud.com", {
-            headers: {
-                "User-Agent": "Mozilla/5.0"
-            }
+        // 1. SoundCloud ki home page se script links nikalna
+        const homeResponse = await axios.get('https://soundcloud.com', {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
         });
+        const html = homeResponse.data;
+        
+        // Scripts ko dhoondhne ke liye regex
+        const scriptRegex = /src="([^"]+\/assets\/[^"]+\.js)"/g;
+        let match;
+        const scripts = [];
+        while ((match = scriptRegex.exec(html)) !== null) {
+            scripts.push(match[1]);
+        }
 
-        const html = home.data;
-
-        const files = [
-            ...html.matchAll(/src="([^"]+\/assets\/[^"]+\.js)"/g)
-        ].map(v => v[1]);
-
-        for (const file of files.reverse().slice(0, 5)) {
-
-            const js = await axios.get(file);
-
-            const match = js.data.match(
-                /client_id\s*:\s*"([a-zA-Z0-9]{32})"/
-            );
-
-            if (match) {
-                CLIENT_ID = match[1];
-                LAST_UPDATE = Date.now();
-                return CLIENT_ID;
+        // 2. Last script ko check karna (aamtaur par isme client_id hoti hai)
+        for (let scriptUrl of scripts.reverse().slice(0, 3)) {
+            const scriptResponse = await axios.get(scriptUrl);
+            const idMatch = scriptResponse.data.match(/client_id\s*:\s*"([a-zA-Z0-9]{32})"/);
+            if (idMatch && idMatch[1]) {
+                return idMatch[1]; // Mil gayi fresh ID!
             }
         }
-    } catch (e) {}
-
-    CLIENT_ID = "2t9mqaC7aZrr6v6scvW6Y06Z7v0K8A1Z";
-    LAST_UPDATE = Date.now();
-
-    return CLIENT_ID;
+    } catch (e) {
+        console.error("ID extraction failed, using fallback");
+    }
+    // Fallback ID agar extraction fail ho jaye
+    return '2t9mqaC7aZrr6v6scvW6Y06Z7v0K8A1Z'; 
 }
 
-// SEARCH
-app.get("/search", async (req, res) => {
+// ROUTE 1: Search Route (With Dynamic Client ID)
+app.get('/search', async (req, res) => {
+    const songQuery = req.query.query;
+    res.setHeader('Content-Type', 'application/json');
 
-    const q = req.query.query;
-
-    if (!q) {
-        return res.status(400).json({
-            success: false,
-            message: "query required"
-        });
+    if (!songQuery) {
+        return res.status(400).json({ error: "Please provide a 'query' parameter." });
     }
 
     try {
-
-        const client_id = await getClientId();
-
-        const r = await axios.get(
-            "https://api-v2.soundcloud.com/search/tracks",
-            {
-                params: {
-                    q,
-                    client_id,
-                    limit: 10
-                }
+        const dynamicId = await getFreshClientId();
+        
+        const response = await axios.get(`https://api-v2.soundcloud.com/search/tracks`, {
+            params: {
+                q: songQuery,
+                client_id: dynamicId,
+                limit: 10
             }
-        );
-
-        const list = (r.data.collection || []).map(track => ({
-            id: track.id,
-            title: track.title,
-            artist: track.user?.username || "Unknown",
-            image: track.artwork_url
-                ? track.artwork_url.replace("large", "t500x500")
-                : null,
-            stream: `/play?id=${track.id}`
-        }));
-
-        res.json({
-            success: true,
-            results: list
         });
 
-    } catch (e) {
+        const data = response.data;
 
-        res.status(500).json({
-            success: false,
-            error: e.message
-        });
-
-    }
-
-});
-
-// PLAY
-app.get("/play", async (req, res) => {
-
-    const query = req.query.query;
-    const id = req.query.id;
-
-    try {
-
-        const client_id = await getClientId();
-
-        let tracks = [];
-
-        if (query) {
-
-            const search = await axios.get(
-                "https://api-v2.soundcloud.com/search/tracks",
-                {
-                    params: {
-                        q: query,
-                        client_id,
-                        limit: 15
-                    }
-                }
-            );
-
-            tracks = search.data.collection || [];
-
-        } else if (id) {
-
-            const track = await axios.get(
-                `https://api-v2.soundcloud.com/tracks/${id}`,
-                {
-                    params: {
-                        client_id
-                    }
-                }
-            );
-
-            tracks = [track.data];
-
-        } else {
-
-            return res.status(400).json({
-                error: "query or id required"
+        if (data && data.collection && data.collection.length > 0) {
+            const results = data.collection.map(track => {
+                const playUrl = `https://${req.get('host')}/play?id=${track.id}`;
+                return {
+                    id: track.id,
+                    title: track.title,
+                    album: track.publisher_metadata?.album_title || "Single",
+                    image: track.artwork_url ? track.artwork_url.replace('large', 't500x500') : 'https://soundcloud.com/favicon.ico',
+                    artist: track.user?.username || "Unknown Artist",
+                    stream_url: playUrl
+                };
             });
 
+            return res.status(200).json({ success: true, results });
         }
 
-        const blocked = [
-            "slowed",
-            "reverb",
-            "remix",
-            "nightcore",
-            "bootleg",
-            "sped up",
-            "8d"
-        ];
+        return res.status(404).json({ success: false, message: "No songs found." });
 
-        tracks.sort((a, b) => {
-
-            const aa = blocked.some(x =>
-                a.title.toLowerCase().includes(x)
-            );
-
-            const bb = blocked.some(x =>
-                b.title.toLowerCase().includes(x)
-            );
-
-            return aa - bb;
-
-        });
-
-        for (const track of tracks) {
-
-            const progressive =
-                track.media?.transcodings?.find(
-                    x => x.format.protocol === "progressive"
-                );
-
-            if (!progressive) continue;
-
-            try {
-
-                const auth = await axios.get(
-                    progressive.url,
-                    {
-                        params: {
-                            client_id
-                        }
-                    }
-                );
-
-                if (auth.data.url) {
-                    return res.redirect(auth.data.url);
-                }
-
-            } catch (e) {}
-
-        }
-
-        res.status(404).json({
-            success: false,
-            message: "No playable stream found"
-        });
-
-    } catch (e) {
-
-        res.status(500).json({
-            success: false,
-            error: e.message
-        });
-
+    } catch (error) {
+        return res.status(500).json({ error: "Dynamic SoundCloud Search failed", details: error.message });
     }
-
 });
 
-const PORT = process.env.PORT || 3000;
+// ROUTE 2: Play Route (With Dynamic Client ID)
+app.get('/play', async (req, res) => {
+    const trackId = req.query.id;
 
-app.listen(PORT, () => {
-    console.log("Running on port " + PORT);
+    if (!trackId) {
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(400).json({ error: "Please provide a track 'id' parameter." });
+    }
+
+    try {
+        const dynamicId = await getFreshClientId();
+
+        const trackResponse = await axios.get(`https://api-v2.soundcloud.com/tracks/${trackId}?client_id=${dynamicId}`);
+        const trackData = trackResponse.data;
+        
+        const progressiveTranscoding = trackData.media?.transcodings?.find(
+            t => t.format.protocol === 'progressive'
+        );
+
+        if (progressiveTranscoding && progressiveTranscoding.url) {
+            const streamAuthResponse = await axios.get(`${progressiveTranscoding.url}?client_id=${dynamicId}`);
+            
+            if (streamAuthResponse.data && streamAuthResponse.data.url) {
+                return res.redirect(streamAuthResponse.data.url);
+            }
+        }
+
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(404).json({ error: "Direct audio stream link not found." });
+
+    } catch (error) {
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(500).json({ error: "Playback failed", details: error.message });
+    }
 });
 
 module.exports = app;
