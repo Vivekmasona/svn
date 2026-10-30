@@ -4,6 +4,8 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
+const DEFAULT_POSTER_URL = "https://i.ibb.co/nqFL3YnZ/1780943911545.png";
+
 let CLIENT_ID = null;
 let LAST_UPDATE = 0;
 
@@ -29,46 +31,53 @@ async function getClientId() {
     return CLIENT_ID;
 }
 
-// --- Helper: Get ID by Name ---
-async function getTrackIdByName(query) {
+// --- Helper: Get Working Track by Name (With Loop Fallback) ---
+async function getWorkingTrack(query) {
     const client_id = await getClientId();
-    const res = await axios.get("https://api-v2.soundcloud.com/search/tracks", {
-        params: { q: query, client_id, limit: 1 }
-    });
-    return res.data.collection[0] ? res.data.collection[0] : null;
+    try {
+        const res = await axios.get("https://api-v2.soundcloud.com/search/tracks", {
+            params: { q: query, client_id, limit: 10 }
+        });
+        
+        const collection = res.data?.collection || [];
+        if (collection.length === 0) return null;
+
+        // Loop to find the first track that has a valid progressive stream
+        for (const track of collection) {
+            const progressive = track.media?.transcodings?.find(x => x.format.protocol === "progressive");
+            if (progressive && progressive.url) {
+                try {
+                    const auth = await axios.get(progressive.url, { params: { client_id } });
+                    if (auth.data?.url) {
+                        return { track, streamUrl: auth.data.url };
+                    }
+                } catch (err) {
+                    continue;
+                }
+            }
+        }
+    } catch (e) {}
+    return null;
 }
 
-
-
-
-// --- Naya Endpoint: Info (Poster + Title + Stream) ---
+// --- Info Endpoint: Info (Poster + Title + Stream) ---
 app.get("/info", async (req, res) => {
     const name = req.query.name;
     if (!name) return res.status(400).json({ error: "name required" });
 
     try {
-        // 1. Gaana search karo
-        const track = await getTrackIdByName(name);
-        if (!track) return res.status(404).json({ message: "Song not found" });
+        const result = await getWorkingTrack(name);
+        if (!result) return res.status(404).json({ message: "Song or playable stream not found" });
 
-        // 2. Poster URL prepare karo
-        const poster = track.artwork_url ? track.artwork_url.replace("large", "t500x500") : null;
+        const { track, streamUrl } = result;
+        const poster = track.artwork_url ? track.artwork_url.replace("large", "t500x500") : DEFAULT_POSTER_URL;
 
-        // 3. Stream URL nikalo
-        const client_id = await getClientId();
-        const progressive = track.media?.transcodings?.find(x => x.format.protocol === "progressive");
-        
-        if (!progressive) return res.status(404).json({ message: "Stream not found" });
-
-        const auth = await axios.get(progressive.url, { params: { client_id } });
-
-        // 4. Sab kuch JSON mein return karo
         res.json({
             success: true,
             title: track.title,
             artist: track.user?.username || "Unknown",
             poster: poster,
-            stream: auth.data.url,
+            stream: streamUrl,
             download: `/dl?name=${encodeURIComponent(name)}`
         });
 
@@ -77,35 +86,33 @@ app.get("/info", async (req, res) => {
     }
 });
 
-
-
-// --- Play Endpoint: play?name=SongName ---
+// --- Play Endpoint: play?name=SongName or play?id=TrackID ---
 app.get("/play", async (req, res) => {
     const name = req.query.name;
     const id = req.query.id;
 
     try {
-        let track;
-        if (name) {
-            track = await getTrackIdByName(name);
-        } else if (id) {
-            const client_id = await getClientId();
+        const client_id = await getClientId();
+        let streamUrl = null;
+
+        if (id) {
             const resData = await axios.get(`https://api-v2.soundcloud.com/tracks/${id}`, { params: { client_id } });
-            track = resData.data;
+            const track = resData.data;
+            const progressive = track.media?.transcodings?.find(x => x.format.protocol === "progressive");
+            if (progressive) {
+                const auth = await axios.get(progressive.url, { params: { client_id } });
+                streamUrl = auth.data?.url;
+            }
+        } else if (name) {
+            const result = await getWorkingTrack(name);
+            if (result) streamUrl = result.streamUrl;
         } else {
             return res.status(400).json({ error: "name or id required" });
         }
 
-        if (!track) return res.status(404).json({ message: "Song not found" });
-
-        const client_id = await getClientId();
-        const progressive = track.media?.transcodings?.find(x => x.format.protocol === "progressive");
-        if (!progressive) return res.status(404).json({ message: "Stream not found" });
-
-        const auth = await axios.get(progressive.url, { params: { client_id } });
-        if (auth.data.url) return res.redirect(auth.data.url);
+        if (streamUrl) return res.redirect(streamUrl);
         
-        res.status(404).json({ message: "No playable stream" });
+        res.status(404).json({ message: "No playable stream found" });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -117,16 +124,11 @@ app.get("/dl", async (req, res) => {
     if (!name) return res.status(400).json({ error: "name required" });
 
     try {
-        const track = await getTrackIdByName(name);
-        if (!track) return res.status(404).json({ message: "Song not found" });
+        const result = await getWorkingTrack(name);
+        if (!result) return res.status(404).json({ message: "Song or stream not found" });
 
-        const client_id = await getClientId();
-        const progressive = track.media?.transcodings?.find(x => x.format.protocol === "progressive");
-        if (!progressive) return res.status(404).json({ message: "Stream not found" });
-
-        const auth = await axios.get(progressive.url, { params: { client_id } });
-        
-        const response = await axios({ method: 'get', url: auth.data.url, responseType: 'stream' });
+        const { track, streamUrl } = result;
+        const response = await axios({ method: 'get', url: streamUrl, responseType: 'stream' });
         
         const safeName = track.title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
         res.setHeader('Content-Disposition', `attachment; filename="${safeName}.mp3"`);
@@ -138,5 +140,10 @@ app.get("/dl", async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running on port " + PORT));
+if (process.env.NODE_ENV !== 'production') {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => console.log("Server running on port " + PORT));
+}
+
+module.exports = app;
+
