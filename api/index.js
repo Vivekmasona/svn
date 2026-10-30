@@ -31,7 +31,7 @@ function getHighQualityImage(url) {
     return url.replace('150x150', '500x500');
 }
 
-// --- 1. Search & List Endpoint: /api/songs?q=hindi (Ya koi bhi query) ---
+// --- Search & List Endpoint: /api/songs?q=hindi ---
 app.get("/api/songs", async (req, res) => {
     const query = req.query.q || req.query.name;
     if (!query) {
@@ -55,7 +55,6 @@ app.get("/api/songs", async (req, res) => {
             return res.status(404).json({ success: false, message: "No songs found." });
         }
 
-        // Har gaane ke liye full link generate karke list return karo
         const formattedSongs = results.map(song => {
             const encryptedUrl = song.more_info?.encrypted_media_url;
             const fullStreamUrl = getFullStreamUrl(encryptedUrl);
@@ -67,7 +66,7 @@ app.get("/api/songs", async (req, res) => {
                 artist: song.more_info?.music || song.subtitle || "Unknown Artist",
                 poster: getHighQualityImage(song.image),
                 duration: song.more_info?.duration ? parseInt(song.more_info.duration) : 0,
-                stream: fullStreamUrl // Yeh hai 100% full-length direct MP3 CDN link!
+                stream: fullStreamUrl
             };
         });
 
@@ -82,7 +81,7 @@ app.get("/api/songs", async (req, res) => {
     }
 });
 
-// --- 2. Single Info Endpoint: /info?name=song_name ---
+// --- Info Endpoint: /info?name=song_name ---
 app.get("/info", async (req, res) => {
     const query = req.query.name || req.query.query;
     if (!query) {
@@ -122,7 +121,7 @@ app.get("/info", async (req, res) => {
     }
 });
 
-// --- 3. Direct Play / Redirect Endpoint: /play?name=song_name ---
+// --- Direct Play / Redirect Endpoint: /play?name=song_name ---
 app.get("/play", async (req, res) => {
     const query = req.query.name || req.query.query;
     if (!query) return res.status(400).json({ error: "Please provide a 'name' parameter." });
@@ -145,7 +144,7 @@ app.get("/play", async (req, res) => {
         }
 
         res.status(404).json({ error: "Stream link not available" });
-    } -> catch (e) {
+    } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
@@ -156,3 +155,4 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 module.exports = app;
+
