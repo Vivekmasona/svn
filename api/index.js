@@ -7,21 +7,30 @@ app.use(express.json());
 
 const DEFAULT_POSTER_URL = "https://i.ibb.co/nqFL3YnZ/1780943911545.png";
 
-// Helper: Decrypt JioSaavn encrypted_media_url to get Full 320kbps MP3 URL
+// Robust Decryption Function for JioSaavn encrypted_media_url
 function getFullStreamUrl(encrypted_media_url) {
     if (!encrypted_media_url) return null;
     try {
+        let encryptedBuffer = Buffer.from(encrypted_media_url, 'base64');
         const key = Buffer.from('38346591', 'utf-8');
+        
         const decipher = crypto.createDecipheriv('des-ecb', key, null);
         decipher.setAutoPadding(true);
         
-        let decrypted = decipher.update(encrypted_media_url, 'base64', 'utf8');
+        let decrypted = decipher.update(encryptedBuffer, undefined, 'utf8');
         decrypted += decipher.final('utf8');
         
-        // Upgrade quality to high quality 320kbps MP3
         return decrypted.replace('_96.mp4', '_320.mp3').replace('_160.mp4', '_320.mp3');
     } catch (e) {
-        return null;
+        try {
+            const decipher = crypto.createDecipheriv('des-ecb', Buffer.from('38346591', 'utf-8'), null);
+            decipher.setAutoPadding(false);
+            let decrypted = decipher.update(encrypted_media_url, 'base64', 'utf8');
+            decrypted += decipher.final('utf8');
+            return decrypted.replace('_96.mp4', '_320.mp3').replace('_160.mp4', '_320.mp3');
+        } catch (err) {
+            return null;
+        }
     }
 }
 
@@ -31,15 +40,16 @@ function getHighQualityImage(url) {
     return url.replace('150x150', '500x500');
 }
 
-// --- Search & List Endpoint: /api/songs?q=hindi ---
+// --- 1. Search & List Endpoint (Get Multiple Songs): /api/songs?q=query ---
 app.get("/api/songs", async (req, res) => {
     const query = req.query.q || req.query.name;
     if (!query) {
-        return res.status(400).json({ error: "Please provide a search query (e.g., /api/songs?q=hindi)" });
+        return res.status(400).json({ error: "Please provide a search query (e.g., /api/songs?q=dil)" });
     }
 
     try {
-        const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&q=${encodeURIComponent(query)}&_format=json&_marker=0&api_version=4&ctx=web64&n=10`;
+        // Yahan 'n=30' kar diya hai taaki us naam se milte-julte 30 gaane tak show ho sakein
+        const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&q=${encodeURIComponent(query)}&_format=json&_marker=0&api_version=4&ctx=web64&n=30`;
         
         const searchRes = await axios.get(searchUrl, {
             headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
@@ -81,7 +91,7 @@ app.get("/api/songs", async (req, res) => {
     }
 });
 
-// --- Info Endpoint: /info?name=song_name ---
+// --- 2. Single Info Endpoint: /info?name=song_name ---
 app.get("/info", async (req, res) => {
     const query = req.query.name || req.query.query;
     if (!query) {
@@ -121,7 +131,7 @@ app.get("/info", async (req, res) => {
     }
 });
 
-// --- Direct Play / Redirect Endpoint: /play?name=song_name ---
+// --- 3. Direct Play / Redirect Endpoint: /play?name=song_name ---
 app.get("/play", async (req, res) => {
     const query = req.query.name || req.query.query;
     if (!query) return res.status(400).json({ error: "Please provide a 'name' parameter." });
@@ -155,4 +165,3 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 module.exports = app;
-
