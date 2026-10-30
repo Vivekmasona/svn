@@ -20,7 +20,7 @@ function decryptUrl(encrypted_media_url) {
         let decrypted = decipher.update(encryptedBuffer, undefined, 'utf8');
         decrypted += decipher.final('utf8');
         
-        let finalUrl = decrypted.replace('_96.mp4', '_320.mp3').replace('_160.mp4', '_320.mp3');
+        let finalUrl = decrypted.replace('_96.mp4', '_320.mp4').replace('_160.mp4', '_320.mp4').replace('_320.mp3', '_320.mp4');
         if (finalUrl.startsWith('http://')) finalUrl = finalUrl.replace('http://', 'https://');
         return finalUrl;
     } catch (e) {
@@ -29,7 +29,7 @@ function decryptUrl(encrypted_media_url) {
             decipher.setAutoPadding(false);
             let decrypted = decipher.update(encrypted_media_url, 'base64', 'utf8');
             decrypted += decipher.final('utf8');
-            return decrypted.replace('_96.mp4', '_320.mp3').replace('_160.mp4', '_320.mp3');
+            return decrypted.replace('_96.mp4', '_320.mp4').replace('_160.mp4', '_320.mp4').replace('_320.mp3', '_320.mp4');
         } catch (err) {
             return null;
         }
@@ -42,7 +42,7 @@ function getHighQualityImage(url) {
     return url.replace('150x150', '500x500');
 }
 
-// --- Helper: Fetch Full Song Details By ID (Bypasses JioTune Previews) ---
+// Helper: Fetch Full Song Details By ID (Bypasses Previews)
 async function getFullSongDetailsById(songId) {
     try {
         const detailsUrl = `https://www.jiosaavn.com/api.php?__call=song.getDetails&cc=in&_marker=0&_format=json&api_version=4&ctx=web64&pids=${songId}`;
@@ -53,16 +53,14 @@ async function getFullSongDetailsById(songId) {
             data = JSON.parse(data.replace(/^\/\*!\s*jquery[\s\S]*?\*\//, '').trim());
         }
 
-        // Song details object usually comes keyed by its ID or inside songs array/object
         const songData = data[songId] || data.songs?.[0] || Object.values(data)[0];
         if (!songData) return null;
 
         const encryptedUrl = songData.more_info?.encrypted_media_url;
         let streamUrl = decryptUrl(encryptedUrl);
 
-        // Agar encrypted url se decrypt na ho, toh direct media_url check karo agar available ho
         if (!streamUrl && songData.more_info?.media_url) {
-            streamUrl = songData.more_info.media_url.replace('_96.mp4', '_320.mp3').replace('_160.mp4', '_320.mp3');
+            streamUrl = songData.more_info.media_url.replace('_96.mp4', '_320.mp4').replace('_160.mp4', '_320.mp4');
         }
 
         return {
@@ -72,7 +70,7 @@ async function getFullSongDetailsById(songId) {
             artist: songData.more_info?.music || songData.subtitle || "Unknown Artist",
             poster: getHighQualityImage(songData.image),
             duration: songData.more_info?.duration ? parseInt(songData.more_info.duration) : 0,
-            stream: streamUrl
+            url: streamUrl // Direct Saavn CDN 320kbps full stream URL
         };
     } catch (e) {
         return null;
@@ -83,11 +81,11 @@ async function getFullSongDetailsById(songId) {
 app.get("/api/songs", async (req, res) => {
     const query = req.query.q || req.query.name;
     if (!query) {
-        return res.status(400).json({ error: "Please provide a search query (e.g., /api/songs?q=padmaavat)" });
+        return res.status(400).json({ error: "Please provide a search query (e.g., /api/songs?q=hindi)" });
     }
 
     try {
-        const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&q=${encodeURIComponent(query)}&_format=json&_marker=0&api_version=4&ctx=web64&n=15`;
+        const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&q=${encodeURIComponent(query)}&_format=json&_marker=0&api_version=4&ctx=web64&n=20`;
         
         const searchRes = await axios.get(searchUrl, {
             headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
@@ -103,18 +101,18 @@ app.get("/api/songs", async (req, res) => {
             return res.status(404).json({ success: false, message: "No songs found." });
         }
 
-        // Har gaane ke liye uski ID se detail fetch karenge taaki 100% full song link mile
         const formattedSongs = [];
         for (const song of results) {
             if (song.id) {
                 const fullSong = await getFullSongDetailsById(song.id);
-                if (fullSong && fullSong.stream) {
+                if (fullSong && fullSong.url) {
                     formattedSongs.push(fullSong);
                 }
             }
         }
 
         res.json({
+            developer: "Vivek Masona",
             success: true,
             total: formattedSongs.length,
             results: formattedSongs
@@ -147,11 +145,12 @@ app.get("/info", async (req, res) => {
         }
 
         const fullSong = await getFullSongDetailsById(song.id);
-        if (!fullSong || !fullSong.stream) {
+        if (!fullSong || !fullSong.url) {
             return res.status(404).json({ success: false, message: "Full stream link not available." });
         }
 
         res.json({
+            developer: "Vivek Masona",
             success: true,
             ...fullSong
         });
@@ -179,8 +178,8 @@ app.get("/play", async (req, res) => {
         if (!song || !song.id) return res.status(404).json({ error: "Song not found" });
 
         const fullSong = await getFullSongDetailsById(song.id);
-        if (fullSong && fullSong.stream) {
-            return res.redirect(fullSong.stream);
+        if (fullSong && fullSong.url) {
+            return res.redirect(fullSong.url);
         }
 
         res.status(404).json({ error: "Stream link not available" });
