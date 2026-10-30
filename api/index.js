@@ -7,9 +7,16 @@ app.use(express.json());
 
 const DEFAULT_POSTER_URL = "https://i.ibb.co/nqFL3YnZ/1780943911545.png";
 
-// Robust Decryption Function for JioSaavn encrypted_media_url
-function getFullStreamUrl(encrypted_media_url) {
-    if (!encrypted_media_url) return null;
+// Robust Decryption Function
+function getFullStreamUrl(song) {
+    if (!song) return null;
+    
+    // Fallback: Agar vlink ya media_preview available hai toh use primary use karein
+    const encrypted_media_url = song.more_info?.encrypted_media_url;
+    if (!encrypted_media_url) {
+        return song.more_info?.vlink || null;
+    }
+
     try {
         let encryptedBuffer = Buffer.from(encrypted_media_url, 'base64');
         const key = Buffer.from('38346591', 'utf-8');
@@ -20,7 +27,9 @@ function getFullStreamUrl(encrypted_media_url) {
         let decrypted = decipher.update(encryptedBuffer, undefined, 'utf8');
         decrypted += decipher.final('utf8');
         
-        return decrypted.replace('_96.mp4', '_320.mp3').replace('_160.mp4', '_320.mp3');
+        let finalUrl = decrypted.replace('_96.mp4', '_320.mp3').replace('_160.mp4', '_320.mp3');
+        if (finalUrl.startsWith('http://')) finalUrl = finalUrl.replace('http://', 'https://');
+        return finalUrl;
     } catch (e) {
         try {
             const decipher = crypto.createDecipheriv('des-ecb', Buffer.from('38346591', 'utf-8'), null);
@@ -29,7 +38,8 @@ function getFullStreamUrl(encrypted_media_url) {
             decrypted += decipher.final('utf8');
             return decrypted.replace('_96.mp4', '_320.mp3').replace('_160.mp4', '_320.mp3');
         } catch (err) {
-            return null;
+            // Final fallback to vlink if decryption completely fails
+            return song.more_info?.vlink || null;
         }
     }
 }
@@ -40,15 +50,14 @@ function getHighQualityImage(url) {
     return url.replace('150x150', '500x500');
 }
 
-// --- 1. Search & List Endpoint (Get Multiple Songs): /api/songs?q=query ---
+// --- 1. Search & List Endpoint: /api/songs?q=query ---
 app.get("/api/songs", async (req, res) => {
     const query = req.query.q || req.query.name;
     if (!query) {
-        return res.status(400).json({ error: "Please provide a search query (e.g., /api/songs?q=dil)" });
+        return res.status(400).json({ error: "Please provide a search query (e.g., /api/songs?q=holi)" });
     }
 
     try {
-        // Yahan 'n=30' kar diya hai taaki us naam se milte-julte 30 gaane tak show ho sakein
         const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&q=${encodeURIComponent(query)}&_format=json&_marker=0&api_version=4&ctx=web64&n=30`;
         
         const searchRes = await axios.get(searchUrl, {
@@ -66,9 +75,6 @@ app.get("/api/songs", async (req, res) => {
         }
 
         const formattedSongs = results.map(song => {
-            const encryptedUrl = song.more_info?.encrypted_media_url;
-            const fullStreamUrl = getFullStreamUrl(encryptedUrl);
-
             return {
                 id: song.id,
                 title: song.title || "Unknown Title",
@@ -76,7 +82,7 @@ app.get("/api/songs", async (req, res) => {
                 artist: song.more_info?.music || song.subtitle || "Unknown Artist",
                 poster: getHighQualityImage(song.image),
                 duration: song.more_info?.duration ? parseInt(song.more_info.duration) : 0,
-                stream: fullStreamUrl
+                stream: getFullStreamUrl(song)
             };
         });
 
@@ -115,15 +121,13 @@ app.get("/info", async (req, res) => {
             return res.status(404).json({ success: false, message: "Song not found." });
         }
 
-        const fullStreamUrl = getFullStreamUrl(song.more_info?.encrypted_media_url);
-
         res.json({
             success: true,
             title: song.title,
             album: song.more_info?.album || "Single",
             artist: song.more_info?.music || song.subtitle,
             poster: getHighQualityImage(song.image),
-            stream: fullStreamUrl
+            stream: getFullStreamUrl(song)
         });
 
     } catch (e) {
@@ -148,7 +152,7 @@ app.get("/play", async (req, res) => {
         const song = data.results?.[0];
         if (!song) return res.status(404).json({ error: "Song not found" });
 
-        const fullStreamUrl = getFullStreamUrl(song.more_info?.encrypted_media_url);
+        const fullStreamUrl = getFullStreamUrl(song);
         if (fullStreamUrl) {
             return res.redirect(fullStreamUrl);
         }
